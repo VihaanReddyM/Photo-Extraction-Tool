@@ -1,11 +1,116 @@
 //! Configuration module for the photo extraction tool
 //!
 //! Supports loading configuration from a TOML file.
+//! Configuration is stored in a standard location:
+//! - Windows: %APPDATA%\photo_extraction_tool\config.toml
+//! - Linux/macOS: ~/.config/photo_extraction_tool/config.toml
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+/// Application name used for config directory
+const APP_NAME: &str = "photo_extraction_tool";
+
+/// Default config file name
+const CONFIG_FILE_NAME: &str = "config.toml";
+
+/// Get the standard configuration directory for the application.
+///
+/// Returns:
+/// - Windows: %APPDATA%\photo_extraction_tool
+/// - Linux/macOS: ~/.config/photo_extraction_tool
+pub fn get_config_dir() -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    {
+        std::env::var("APPDATA")
+            .ok()
+            .map(|appdata| PathBuf::from(appdata).join(APP_NAME))
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        std::env::var("HOME")
+            .ok()
+            .map(|home| PathBuf::from(home).join(".config").join(APP_NAME))
+    }
+}
+
+/// Get the standard configuration file path.
+///
+/// Returns the full path to the config file in the standard location.
+pub fn get_config_path() -> Option<PathBuf> {
+    get_config_dir().map(|dir| dir.join(CONFIG_FILE_NAME))
+}
+
+/// Ensure the configuration directory exists.
+///
+/// Creates the directory and all parent directories if they don't exist.
+pub fn ensure_config_dir() -> Result<PathBuf, ConfigError> {
+    let config_dir = get_config_dir()
+        .ok_or_else(|| ConfigError::ConfigDirNotFound)?;
+
+    if !config_dir.exists() {
+        fs::create_dir_all(&config_dir)
+            .map_err(|e| ConfigError::WriteError(config_dir.clone(), e.to_string()))?;
+    }
+
+    Ok(config_dir)
+}
+
+/// Initialize the configuration file if it doesn't exist.
+///
+/// Creates the config directory and copies the default config template.
+/// Returns the path to the config file.
+pub fn init_config() -> Result<PathBuf, ConfigError> {
+    let config_dir = ensure_config_dir()?;
+    let config_path = config_dir.join(CONFIG_FILE_NAME);
+
+    if !config_path.exists() {
+        let default_config = Config::generate_default_config();
+        fs::write(&config_path, default_config)
+            .map_err(|e| ConfigError::WriteError(config_path.clone(), e.to_string()))?;
+    }
+
+    Ok(config_path)
+}
+
+/// Open the configuration file in the default application.
+///
+/// This will typically open the file in Notepad on Windows,
+/// or the default text editor on other platforms.
+pub fn open_config_in_editor() -> Result<PathBuf, ConfigError> {
+    // Ensure config exists first
+    let config_path = init_config()?;
+
+    // Open with default application
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", config_path.to_str().unwrap_or("")])
+            .spawn()
+            .map_err(|e| ConfigError::OpenError(config_path.clone(), e.to_string()))?;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&config_path)
+            .spawn()
+            .map_err(|e| ConfigError::OpenError(config_path.clone(), e.to_string()))?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&config_path)
+            .spawn()
+            .map_err(|e| ConfigError::OpenError(config_path.clone(), e.to_string()))?;
+    }
+
+    Ok(config_path)
+}
 
 /// Hash algorithm for duplicate detection
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -322,21 +427,54 @@ impl Config {
     }
 
     /// Load configuration from default locations
-    /// Tries: ./config.toml, ./photo_extraction.toml, ~/.photo_extraction.toml
+    ///
+    /// Search order:
+    /// 1. ./config.toml (current directory - for development/override)
+    /// 2. ./photo_extraction.toml (current directory - alternative name)
+    /// 3. Standard config location (%APPDATA%\photo_extraction_tool\config.toml on Windows)
+    ///
+    /// If no config file is found, returns default configuration.
     pub fn load_default() -> Result<Self, ConfigError> {
-        let default_paths = [
+        // First check local directory (allows for project-specific overrides)
+        let local_paths = [
             PathBuf::from("./config.toml"),
             PathBuf::from("./photo_extraction.toml"),
         ];
 
-        for path in &default_paths {
+        for path in &local_paths {
             if path.exists() {
                 return Self::load(path);
             }
         }
 
+        // Then check standard config location
+        if let Some(config_path) = get_config_path() {
+            if config_path.exists() {
+                return Self::load(&config_path);
+            }
+        }
+
         // No config file found, use defaults
         Ok(Self::default())
+    }
+
+    /// Get the path where the config file is (or would be) located.
+    ///
+    /// Returns the first existing config file path, or the standard location if none exists.
+    pub fn get_active_config_path() -> PathBuf {
+        let local_paths = [
+            PathBuf::from("./config.toml"),
+            PathBuf::from("./photo_extraction.toml"),
+        ];
+
+        for path in &local_paths {
+            if path.exists() {
+                return path.clone();
+            }
+        }
+
+        // Return standard location
+        get_config_path().unwrap_or_else(|| PathBuf::from("./config.toml"))
     }
 
     /// Save configuration to a TOML file
@@ -376,6 +514,10 @@ pub enum ConfigError {
     SerializeError(String),
     /// Failed to write configuration file
     WriteError(PathBuf, String),
+    /// Could not determine config directory
+    ConfigDirNotFound,
+    /// Failed to open config file in editor
+    OpenError(PathBuf, String),
 }
 
 impl std::fmt::Display for ConfigError {
@@ -407,6 +549,17 @@ impl std::fmt::Display for ConfigError {
                 write!(
                     f,
                     "Failed to write config file '{}': {}",
+                    path.display(),
+                    err
+                )
+            }
+            ConfigError::ConfigDirNotFound => {
+                write!(f, "Could not determine configuration directory")
+            }
+            ConfigError::OpenError(path, err) => {
+                write!(
+                    f,
+                    "Failed to open config file '{}': {}",
                     path.display(),
                     err
                 )

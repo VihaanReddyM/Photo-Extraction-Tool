@@ -8,7 +8,7 @@ mod tracking;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use config::Config;
+use config::{get_config_path, init_config, open_config_in_editor, Config};
 use env_logger::Builder;
 use indicatif::{ProgressBar, ProgressStyle};
 use log::{error, info, warn, LevelFilter};
@@ -75,11 +75,28 @@ enum Commands {
         all: bool,
     },
 
-    /// Generate a default configuration file
+    /// Open the configuration file in your default editor
+    ///
+    /// The config file is stored at:
+    /// - Windows: %APPDATA%\photo_extraction_tool\config.toml
+    /// - Linux/macOS: ~/.config/photo_extraction_tool/config.toml
+    ///
+    /// If no config file exists, a default one will be created.
+    Config {
+        /// Show the config file path without opening it
+        #[arg(long)]
+        path: bool,
+
+        /// Reset config to defaults (creates a fresh config file)
+        #[arg(long)]
+        reset: bool,
+    },
+
+    /// Generate a configuration file at a specific location
     GenerateConfig {
-        /// Output path for the config file
-        #[arg(short, long, default_value = "./config.toml")]
-        output: PathBuf,
+        /// Output path for the config file (defaults to standard location)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
     },
 
     /// Show current configuration
@@ -214,8 +231,11 @@ fn main() -> Result<()> {
 
     // Handle commands
     match args.command {
+        Some(Commands::Config { path, reset }) => {
+            handle_config_command(path, reset)?;
+        }
         Some(Commands::GenerateConfig { output }) => {
-            generate_config_file(&output)?;
+            generate_config_file(output)?;
         }
         Some(Commands::ShowConfig) => {
             show_config(&config);
@@ -284,19 +304,86 @@ fn remove_profile(config: &Config, name: &str) -> Result<()> {
     Ok(())
 }
 
-fn generate_config_file(output: &PathBuf) -> Result<()> {
+/// Handle the `config` command - open, show path, or reset the config file
+fn handle_config_command(show_path: bool, reset: bool) -> Result<()> {
+    if reset {
+        // Delete existing config and create a fresh one
+        if let Some(config_path) = get_config_path() {
+            if config_path.exists() {
+                std::fs::remove_file(&config_path)?;
+                info!("Removed existing config file");
+            }
+        }
+        let path = init_config()?;
+        info!("Created fresh config file at: {}", path.display());
+        return Ok(());
+    }
+
+    if show_path {
+        // Just show the path
+        let path = Config::get_active_config_path();
+        println!("{}", path.display());
+        if path.exists() {
+            info!("Config file exists at: {}", path.display());
+        } else {
+            info!("Config file would be created at: {}", path.display());
+        }
+        return Ok(());
+    }
+
+    // Open the config file in the default editor
+    info!("Opening configuration file in default editor...");
+    match open_config_in_editor() {
+        Ok(path) => {
+            info!("Config file: {}", path.display());
+            info!("Save the file after editing to apply changes.");
+            info!("Run 'photo_extraction_tool show-config' to verify your settings.");
+        }
+        Err(e) => {
+            error!("Failed to open config file: {}", e);
+            // Fall back to showing the path
+            if let Some(path) = get_config_path() {
+                info!("You can manually edit the config at: {}", path.display());
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn generate_config_file(output: Option<PathBuf>) -> Result<()> {
     use std::fs;
 
-    let content = Config::generate_default_config();
-    fs::write(output, content)?;
+    let custom_path = output.is_some();
+    let output_path = match output {
+        Some(path) => path,
+        None => {
+            // Use standard location
+            init_config()?
+        }
+    };
 
-    info!("Generated default configuration file: {}", output.display());
+    // If a specific path was given, write the config there
+    if custom_path {
+        let content = Config::generate_default_config();
+        fs::write(&output_path, content)?;
+    }
+
+    info!("Configuration file: {}", output_path.display());
     info!("Edit this file to customize the extraction settings.");
+    info!("");
+    info!("Quick tip: Run 'photo_extraction_tool config' to open the config in your editor.");
 
     Ok(())
 }
 
 fn show_config(config: &Config) {
+    let config_path = Config::get_active_config_path();
+    info!("Configuration file: {}", config_path.display());
+    if !config_path.exists() {
+        info!("(Using default settings - no config file found)");
+    }
+    info!("");
     info!("Current Configuration:");
     info!("----------------------");
     info!("[output]");

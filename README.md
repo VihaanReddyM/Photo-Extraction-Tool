@@ -75,6 +75,9 @@ photo-extraction-tool --output "D:/Photos/iPhone Backup"
 
 # List connected devices
 photo-extraction-tool --list-devices
+
+# Open the config file in your default editor
+photo-extraction-tool config
 ```
 
 That's it! Your photos will be extracted to the specified folder.
@@ -93,7 +96,16 @@ photo-extraction-tool
 photo-extraction-tool --output "./my_photos"
 photo-extraction-tool -o "D:/Backups/iPhone"
 
-# Use a specific configuration file
+# Open and edit your configuration
+photo-extraction-tool config
+
+# Show where the config file is located
+photo-extraction-tool config --path
+
+# Reset config to defaults
+photo-extraction-tool config --reset
+
+# Use a specific configuration file (override)
 photo-extraction-tool --config ./my_config.toml
 photo-extraction-tool -c ./my_config.toml
 
@@ -124,15 +136,55 @@ photo-extraction-tool --help
 | `--help` | `-h` | Show help message |
 | `--version` | `-V` | Show version |
 
+### Subcommands
+
+| Command | Description |
+|---------|-------------|
+| `config` | Open the config file in your default editor |
+| `config --path` | Show the config file location |
+| `config --reset` | Reset configuration to defaults |
+| `generate-config` | Generate config at a specific location |
+| `show-config` | Display current configuration settings |
+| `list` | List connected devices |
+| `extract` | Extract photos (default if no command given) |
+| `scan` | Scan device folder structure |
+| `list-profiles` | List configured device profiles |
+| `remove-profile` | Remove a device profile |
+
 ---
 
 ## ⚙️ Configuration
 
-Create a `config.toml` file to customize the tool's behavior. Copy `config.example.toml` as a starting point:
+Configuration is stored in a standard location that persists across updates:
+
+| Platform | Location |
+|----------|----------|
+| **Windows** | `%APPDATA%\photo_extraction_tool\config.toml` |
+| **Linux/macOS** | `~/.config/photo_extraction_tool/config.toml` |
+
+### Quick Setup
+
+The easiest way to configure the tool:
 
 ```bash
-cp config.example.toml config.toml
+# Open config in your default text editor (Notepad, VS Code, etc.)
+photo-extraction-tool config
 ```
+
+This will:
+1. Create the config directory if it doesn't exist
+2. Create a default config file with all options documented
+3. Open it in your default editor for `.toml` files
+
+After editing, just save the file - changes apply on the next run.
+
+### Alternative: Local Config Override
+
+You can also place a `config.toml` in your current directory to override the global config. This is useful for project-specific settings. The search order is:
+
+1. `./config.toml` (current directory)
+2. `./photo_extraction.toml` (current directory)
+3. Standard config location (see table above)
 
 ### Configuration Sections
 
@@ -292,6 +344,22 @@ D:/Photos/
     └── DCIM/...
 ```
 
+### Managing Your Configuration
+
+```bash
+# Open config in your default editor
+photo-extraction-tool config
+
+# View current settings
+photo-extraction-tool show-config
+
+# See where the config file is stored
+photo-extraction-tool config --path
+
+# Start fresh with default settings
+photo-extraction-tool config --reset
+```
+
 ### Date-Based Organization
 
 Organize photos by when they were taken:
@@ -343,6 +411,7 @@ extracted_photos/
 | "No devices found" | Connect device, unlock it, and trust the computer |
 | "Access denied" | Unlock device or run as Administrator |
 | "Path not found" | Check output directory exists |
+| "Config file not found" | Run `photo_extraction_tool config` to create one |
 
 ---
 

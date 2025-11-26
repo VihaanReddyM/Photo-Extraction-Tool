@@ -2,8 +2,17 @@
 # ║                    📸 Photo Extraction Tool Configuration                    ║
 # ╠══════════════════════════════════════════════════════════════════════════════╣
 # ║  This configuration file allows you to customize the behavior of the        ║
-# ║  photo extraction tool. Copy this file to `config.toml` and modify          ║
-# ║  the settings below to match your preferences.                              ║
+# ║  photo extraction tool. Modify the settings below to match your preferences.║
+# ║                                                                              ║
+# ║  Config file location:                                                       ║
+# ║    Windows:     %APPDATA%\photo_extraction_tool\config.toml                  ║
+# ║    Linux/macOS: ~/.config/photo_extraction_tool/config.toml                  ║
+# ║                                                                              ║
+# ║  Quick commands:                                                             ║
+# ║    photo_extraction_tool config         - Open this file in your editor     ║
+# ║    photo_extraction_tool config --path  - Show config file location         ║
+# ║    photo_extraction_tool config --reset - Reset to default settings         ║
+# ║    photo_extraction_tool show-config    - View current settings             ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 
 # ┌──────────────────────────────────────────────────────────────────────────────┐
@@ -235,7 +244,7 @@ track_extracted_files = true
 # ║                              QUICK START GUIDE                               ║
 # ╠══════════════════════════════════════════════════════════════════════════════╣
 # ║                                                                              ║
-# ║  1. Copy this file to `config.toml` in the same directory as the tool       ║
+# ║  1. Edit this file using: photo_extraction_tool config                       ║
 # ║                                                                              ║
 # ║  2. Basic backup (most users):                                               ║
 # ║     - Set output.directory to your preferred backup location                 ║
@@ -251,5 +260,7 @@ track_extracted_files = true
 # ║                                                                              ║
 # ║  5. Photos only (no videos):                                                 ║
 # ║     - Set extraction.include_videos = false                                  ║
+# ║                                                                              ║
+# ║  After editing, save this file. Changes apply on the next run.               ║
 # ║                                                                              ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
