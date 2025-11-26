@@ -3,12 +3,17 @@
 //! This module contains the implementation of all CLI commands.
 
 use crate::cli::progress::{BenchmarkProgress, ScanProgressTracker};
-use crate::cli::{Args, Commands};
+use crate::cli::{Args, Commands, TestCommands};
 use crate::core::config::{get_config_path, init_config, open_config_in_editor, Config};
 use crate::core::extractor;
 use crate::device::{self, ProfileManager};
+use crate::testdb::{
+    self, InteractiveTestMode, MockDataGenerator, ScenarioLibrary, TestRunner, TestRunnerConfig,
+};
 use anyhow::Result;
 use log::{error, info, warn};
+use std::fs;
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -44,8 +49,70 @@ pub fn run_command(args: &Args, config: &Config, shutdown_flag: Arc<AtomicBool>)
         Some(Commands::BenchmarkScan { dcim_only }) => {
             benchmark_scan(config, *dcim_only)?;
         }
+        Some(Commands::Test { test_command }) => {
+            handle_test_command(test_command)?;
+        }
     }
 
+    Ok(())
+}
+
+/// Handle test subcommands
+pub fn handle_test_command(test_command: &TestCommands) -> Result<()> {
+    match test_command {
+        TestCommands::RunAll {
+            html_report,
+            json_report,
+            output,
+            fail_fast,
+        } => {
+            test_run_all(*html_report, *json_report, output.clone(), *fail_fast)?;
+        }
+        TestCommands::RunQuick { verbose } => {
+            test_run_quick(*verbose)?;
+        }
+        TestCommands::RunTag { tag, verbose } => {
+            test_run_by_tag(tag, *verbose)?;
+        }
+        TestCommands::Run { scenarios, verbose } => {
+            test_run_scenarios(scenarios, *verbose)?;
+        }
+        TestCommands::ListScenarios { tag, detailed } => {
+            test_list_scenarios(tag.as_deref(), *detailed)?;
+        }
+        TestCommands::ListTags => {
+            test_list_tags()?;
+        }
+        TestCommands::Interactive => {
+            test_interactive()?;
+        }
+        TestCommands::Info { name } => {
+            test_scenario_info(name)?;
+        }
+        TestCommands::SimulateExtract {
+            scenario,
+            output,
+            verbose,
+            simulate_errors,
+        } => {
+            test_simulate_extract(scenario, output, *verbose, *simulate_errors)?;
+        }
+        TestCommands::GenerateData {
+            output,
+            count,
+            types,
+            include_duplicates,
+            seed,
+        } => {
+            test_generate_data(output, *count, types, *include_duplicates, *seed)?;
+        }
+        TestCommands::BenchmarkMock {
+            file_count,
+            iterations,
+        } => {
+            test_benchmark_mock(*file_count, *iterations)?;
+        }
+    }
     Ok(())
 }
 
@@ -579,6 +646,534 @@ fn scan_recursive(
     if file_count > 0 {
         progress.add_files(file_count);
     }
+
+    Ok(())
+}
+
+// =========================================================================
+// TEST COMMAND IMPLEMENTATIONS
+// =========================================================================
+
+/// Run all test scenarios
+fn test_run_all(
+    html_report: bool,
+    json_report: bool,
+    output: Option<PathBuf>,
+    fail_fast: bool,
+) -> Result<()> {
+    let report_dir = output.map(|p| p.to_string_lossy().to_string());
+
+    let config = TestRunnerConfig {
+        verbose: true,
+        fail_fast,
+        html_report,
+        json_report,
+        report_dir,
+        ..Default::default()
+    };
+
+    let mut runner = TestRunner::with_config(config);
+    let summary = runner.run_all();
+
+    if summary.failed > 0 {
+        std::process::exit(1);
+    }
+
+    Ok(())
+}
+
+/// Run quick test scenarios
+fn test_run_quick(verbose: bool) -> Result<()> {
+    let config = TestRunnerConfig {
+        verbose,
+        ..Default::default()
+    };
+
+    let mut runner = TestRunner::with_config(config);
+    let summary = runner.run_quick();
+
+    println!(
+        "\n✓ Quick tests complete: {}/{} passed",
+        summary.passed, summary.total
+    );
+
+    if summary.failed > 0 {
+        std::process::exit(1);
+    }
+
+    Ok(())
+}
+
+/// Run tests filtered by tag
+fn test_run_by_tag(tag: &str, verbose: bool) -> Result<()> {
+    let config = TestRunnerConfig {
+        verbose,
+        ..Default::default()
+    };
+
+    let mut runner = TestRunner::with_config(config);
+    let summary = runner.run_by_tag(tag);
+
+    println!(
+        "\n✓ Tests with tag '{}' complete: {}/{} passed",
+        tag, summary.passed, summary.total
+    );
+
+    if summary.failed > 0 {
+        std::process::exit(1);
+    }
+
+    Ok(())
+}
+
+/// Run specific scenarios by name
+fn test_run_scenarios(scenarios: &[String], verbose: bool) -> Result<()> {
+    let config = TestRunnerConfig {
+        verbose,
+        ..Default::default()
+    };
+
+    let names: Vec<&str> = scenarios.iter().map(|s| s.as_str()).collect();
+
+    let mut runner = TestRunner::with_config(config);
+    let summary = runner.run_by_names(&names);
+
+    println!(
+        "\n✓ Selected tests complete: {}/{} passed",
+        summary.passed, summary.total
+    );
+
+    if summary.failed > 0 {
+        std::process::exit(1);
+    }
+
+    Ok(())
+}
+
+/// List all available test scenarios
+fn test_list_scenarios(tag_filter: Option<&str>, detailed: bool) -> Result<()> {
+    let scenarios = if let Some(tag) = tag_filter {
+        ScenarioLibrary::scenarios_by_tag(tag)
+    } else {
+        ScenarioLibrary::all_scenarios()
+    };
+
+    if scenarios.is_empty() {
+        if let Some(tag) = tag_filter {
+            println!("No scenarios found with tag '{}'", tag);
+        } else {
+            println!("No scenarios available");
+        }
+        return Ok(());
+    }
+
+    println!("\n╔══════════════════════════════════════════════════════════════╗");
+    println!("║              AVAILABLE TEST SCENARIOS                        ║");
+    println!("╚══════════════════════════════════════════════════════════════╝\n");
+
+    if detailed {
+        for scenario in &scenarios {
+            println!("📋 {}", scenario.name);
+            println!("   Description: {}", scenario.description);
+            println!("   Tags: {}", scenario.tags.join(", "));
+            println!("   Expected files: {}", scenario.expected.files_to_extract);
+            println!("   Should succeed: {}", scenario.expected.should_succeed);
+            if let Some(ref err) = scenario.expected.expected_error {
+                println!("   Expected error: {}", err);
+            }
+            println!();
+        }
+    } else {
+        for scenario in &scenarios {
+            let tags_str = if scenario.tags.is_empty() {
+                String::new()
+            } else {
+                format!(" [{}]", scenario.tags.join(", "))
+            };
+            println!(
+                "  • {} - {}{}",
+                scenario.name, scenario.description, tags_str
+            );
+        }
+        println!();
+    }
+
+    println!("Total: {} scenarios", scenarios.len());
+    Ok(())
+}
+
+/// List all available tags
+fn test_list_tags() -> Result<()> {
+    let tags = testdb::list_tags();
+
+    println!("\n📌 Available Tags for Filtering:\n");
+    for tag in &tags {
+        let count = ScenarioLibrary::scenarios_by_tag(tag).len();
+        println!("  • {} ({} scenarios)", tag, count);
+    }
+    println!();
+    println!("Use: photo_extraction_tool test run-tag <TAG>");
+    Ok(())
+}
+
+/// Run interactive test mode
+fn test_interactive() -> Result<()> {
+    let mut mode = InteractiveTestMode::new();
+
+    println!("\n╔══════════════════════════════════════════════════════════════╗");
+    println!("║           INTERACTIVE TEST MODE                              ║");
+    println!("╚══════════════════════════════════════════════════════════════╝\n");
+
+    loop {
+        println!("\nOptions:");
+        println!("  [l] List all scenarios");
+        println!("  [q] Run quick tests");
+        println!("  [r] Run specific scenario");
+        println!("  [a] Run all tests");
+        println!("  [i] Show scenario info");
+        println!("  [x] Exit\n");
+
+        print!("Enter choice: ");
+        io::stdout().flush()?;
+
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        let choice = input.trim().to_lowercase();
+
+        match choice.as_str() {
+            "l" => {
+                mode.list_scenarios();
+            }
+            "q" => {
+                println!("\nRunning quick tests...\n");
+                test_run_quick(true)?;
+            }
+            "r" => {
+                print!("Enter scenario name or number: ");
+                io::stdout().flush()?;
+                let mut name = String::new();
+                io::stdin().read_line(&mut name)?;
+                let name = name.trim();
+
+                // Try parsing as number first
+                if let Ok(idx) = name.parse::<usize>() {
+                    if mode.select_scenario(idx.saturating_sub(1)) {
+                        if let Some(result) = mode.run_current() {
+                            println!(
+                                "\nResult: {} - {}",
+                                if result.passed { "PASSED" } else { "FAILED" },
+                                result.message
+                            );
+                        }
+                    } else {
+                        println!("Invalid scenario number");
+                    }
+                } else {
+                    test_run_scenarios(&[name.to_string()], true)?;
+                }
+            }
+            "a" => {
+                println!("\nRunning all tests...\n");
+                test_run_all(false, false, None, false)?;
+            }
+            "i" => {
+                print!("Enter scenario name: ");
+                io::stdout().flush()?;
+                let mut name = String::new();
+                io::stdin().read_line(&mut name)?;
+                test_scenario_info(name.trim())?;
+            }
+            "x" | "exit" | "quit" => {
+                println!("Exiting interactive mode.");
+                break;
+            }
+            _ => {
+                println!("Unknown option: {}", choice);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Show information about a specific scenario
+fn test_scenario_info(name: &str) -> Result<()> {
+    let scenarios = ScenarioLibrary::all_scenarios();
+    let scenario = scenarios.iter().find(|s| s.name == name);
+
+    match scenario {
+        Some(s) => {
+            println!("\n╔══════════════════════════════════════════════════════════════╗");
+            println!("║  SCENARIO: {:<50} ║", s.name);
+            println!("╚══════════════════════════════════════════════════════════════╝\n");
+            println!("Description: {}", s.description);
+            println!("Tags: {}", s.tags.join(", "));
+            println!("\nDevice Info:");
+            println!("  Name: {}", s.device_info.friendly_name);
+            println!("  Manufacturer: {}", s.device_info.manufacturer);
+            println!("  Model: {}", s.device_info.model);
+            println!("  Device ID: {}", s.device_info.device_id);
+            println!("\nFile System:");
+            println!("  Total objects: {}", s.file_system.object_count());
+            println!("  Files: {}", s.file_system.file_count());
+            println!("  Folders: {}", s.file_system.folder_count());
+            println!("  Total size: {} bytes", s.file_system.total_size());
+            println!("\nExpected Results:");
+            println!("  Files to extract: {}", s.expected.files_to_extract);
+            println!("  Folders: {}", s.expected.folders);
+            println!("  Duplicates: {}", s.expected.duplicates);
+            println!("  Errors: {}", s.expected.errors);
+            println!("  Should succeed: {}", s.expected.should_succeed);
+            if let Some(ref err) = s.expected.expected_error {
+                println!("  Expected error: {}", err);
+            }
+            println!();
+        }
+        None => {
+            println!("Scenario '{}' not found.", name);
+            println!("\nAvailable scenarios:");
+            for s in &scenarios {
+                println!("  • {}", s.name);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Simulate extraction from a mock device
+fn test_simulate_extract(
+    scenario_name: &str,
+    output: &PathBuf,
+    verbose: bool,
+    _simulate_errors: bool,
+) -> Result<()> {
+    let scenarios = ScenarioLibrary::all_scenarios();
+    let scenario = scenarios.into_iter().find(|s| s.name == scenario_name);
+
+    match scenario {
+        Some(s) => {
+            println!("\n🔧 Simulating extraction from: {}", s.name);
+            println!("   Device: {}", s.device_info.friendly_name);
+            println!("   Output: {}", output.display());
+            println!();
+
+            // Create output directory
+            fs::create_dir_all(output)?;
+
+            // Simulate extraction by writing mock files
+            let mut extracted = 0;
+            let mut errors = 0;
+
+            for obj in s.file_system.all_objects() {
+                if obj.is_folder {
+                    continue;
+                }
+
+                let file_path = output.join(&obj.name);
+
+                if let Some(ref content) = obj.content {
+                    match fs::write(&file_path, content) {
+                        Ok(_) => {
+                            extracted += 1;
+                            if verbose {
+                                println!("  ✓ Extracted: {} ({} bytes)", obj.name, obj.size);
+                            }
+                        }
+                        Err(e) => {
+                            errors += 1;
+                            if verbose {
+                                println!("  ✗ Error: {} - {}", obj.name, e);
+                            }
+                        }
+                    }
+                }
+            }
+
+            println!("\n✓ Simulation complete:");
+            println!("  Files extracted: {}", extracted);
+            println!("  Errors: {}", errors);
+            println!("  Output directory: {}", output.display());
+        }
+        None => {
+            println!("Scenario '{}' not found.", scenario_name);
+            println!("Use 'test list-scenarios' to see available scenarios.");
+        }
+    }
+
+    Ok(())
+}
+
+/// Generate mock test data files
+fn test_generate_data(
+    output: &PathBuf,
+    count: usize,
+    types: &str,
+    include_duplicates: bool,
+    seed: Option<u64>,
+) -> Result<()> {
+    println!("\n🔧 Generating mock test data...");
+    println!("   Output: {}", output.display());
+    println!("   Count: {} files", count);
+    println!("   Types: {}", types);
+    println!();
+
+    fs::create_dir_all(output)?;
+
+    let extensions: Vec<&str> = if types == "all" {
+        vec!["jpg", "heic", "png", "mov", "mp4"]
+    } else {
+        types.split(',').map(|s| s.trim()).collect()
+    };
+
+    let base_seed = seed.unwrap_or(42);
+    let files_per_type = count / extensions.len().max(1);
+
+    let mut total_generated = 0;
+
+    for (ext_idx, ext) in extensions.iter().enumerate() {
+        for i in 0..files_per_type {
+            let file_seed = base_seed + (ext_idx * 10000 + i) as u64;
+            let size = match *ext {
+                "mov" | "mp4" => 10 * 1024 * 1024, // 10MB for videos
+                "heic" => 2 * 1024 * 1024,         // 2MB for HEIC
+                _ => 1024 * 1024,                  // 1MB for others
+            };
+
+            let content = MockDataGenerator::generate_for_extension_with_seed(ext, size, file_seed);
+            let filename = format!("TEST_{:05}.{}", total_generated, ext.to_uppercase());
+            let file_path = output.join(&filename);
+
+            fs::write(&file_path, &content)?;
+            total_generated += 1;
+
+            // Create duplicate if requested (every 10th file)
+            if include_duplicates && i % 10 == 0 && i > 0 {
+                let dup_filename =
+                    format!("TEST_{:05}_DUP.{}", total_generated, ext.to_uppercase());
+                let dup_path = output.join(&dup_filename);
+                fs::write(&dup_path, &content)?;
+                total_generated += 1;
+            }
+        }
+    }
+
+    println!(
+        "✓ Generated {} files in {}",
+        total_generated,
+        output.display()
+    );
+
+    if include_duplicates {
+        let dup_count = files_per_type / 10 * extensions.len();
+        println!("  Including {} intentional duplicates", dup_count);
+    }
+
+    Ok(())
+}
+
+/// Benchmark mock device performance
+fn test_benchmark_mock(file_count: usize, iterations: usize) -> Result<()> {
+    use std::time::Instant;
+
+    println!("\n╔══════════════════════════════════════════════════════════════╗");
+    println!("║              MOCK DEVICE BENCHMARK                           ║");
+    println!("╚══════════════════════════════════════════════════════════════╝\n");
+
+    println!("Configuration:");
+    println!("  File count: {}", file_count);
+    println!("  Iterations: {}", iterations);
+    println!();
+
+    let mut creation_times = Vec::new();
+    let mut enumeration_times = Vec::new();
+    let mut read_times = Vec::new();
+
+    for iter in 0..iterations {
+        print!("  Iteration {}/{}... ", iter + 1, iterations);
+        io::stdout().flush()?;
+
+        // Benchmark file system creation
+        let start = Instant::now();
+        let mut fs = testdb::MockFileSystem::new();
+
+        fs.add_object(testdb::MockObject::folder(
+            "internal",
+            "DEVICE",
+            "Internal Storage",
+        ));
+        fs.add_object(testdb::MockObject::folder("dcim", "internal", "DCIM"));
+        fs.add_object(testdb::MockObject::folder("100apple", "dcim", "100APPLE"));
+
+        for i in 0..file_count {
+            let content = MockDataGenerator::generate_jpeg_header(1024);
+            fs.add_object(testdb::MockObject::file(
+                &format!("file_{}", i),
+                "100apple",
+                &format!("IMG_{:05}.JPG", i),
+                content.len() as u64,
+                content,
+            ));
+        }
+        creation_times.push(start.elapsed());
+
+        // Benchmark enumeration
+        let start = Instant::now();
+        let _ = fs.get_children("100apple");
+        enumeration_times.push(start.elapsed());
+
+        // Benchmark file reads
+        let start = Instant::now();
+        for i in 0..file_count.min(100) {
+            let _ = fs.read_file(&format!("file_{}", i));
+        }
+        read_times.push(start.elapsed());
+
+        println!("done");
+    }
+
+    // Calculate averages
+    let avg_creation: f64 =
+        creation_times.iter().map(|d| d.as_secs_f64()).sum::<f64>() / iterations as f64;
+    let avg_enum: f64 = enumeration_times
+        .iter()
+        .map(|d| d.as_secs_f64())
+        .sum::<f64>()
+        / iterations as f64;
+    let avg_read: f64 = read_times.iter().map(|d| d.as_secs_f64()).sum::<f64>() / iterations as f64;
+
+    println!("\n╔══════════════════════════════════════════════════════════════╗");
+    println!("║                      RESULTS                                 ║");
+    println!("╠══════════════════════════════════════════════════════════════╣");
+    println!(
+        "║  File system creation ({} files):                            ║",
+        file_count
+    );
+    println!(
+        "║    Average: {:.4}s                                          ║",
+        avg_creation
+    );
+    println!(
+        "║    Per file: {:.4}ms                                         ║",
+        avg_creation * 1000.0 / file_count as f64
+    );
+    println!("╠══════════════════════════════════════════════════════════════╣");
+    println!("║  Enumeration:                                                ║");
+    println!(
+        "║    Average: {:.6}s                                          ║",
+        avg_enum
+    );
+    println!("╠══════════════════════════════════════════════════════════════╣");
+    println!("║  File reads (100 files):                                     ║");
+    println!(
+        "║    Average: {:.4}s                                          ║",
+        avg_read
+    );
+    println!(
+        "║    Per file: {:.4}ms                                         ║",
+        avg_read * 1000.0 / 100.0
+    );
+    println!("╚══════════════════════════════════════════════════════════════╝\n");
 
     Ok(())
 }

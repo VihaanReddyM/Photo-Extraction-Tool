@@ -10,6 +10,7 @@ mod cli;
 mod core;
 mod device;
 mod duplicate;
+mod testdb;
 
 use anyhow::Result;
 use clap::Parser;

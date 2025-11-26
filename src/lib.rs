@@ -12,6 +12,7 @@
 //! - [`device`] - Device interaction via Windows Portable Devices API
 //! - [`duplicate`] - Duplicate detection using perceptual hashing and other methods
 //! - [`cli`] - Command-line interface (only used by the binary)
+//! - [`testdb`] - Test database with mock devices and scenarios for testing
 //!
 //! # Example Usage
 //!
@@ -45,6 +46,22 @@
 //! }
 //! ```
 //!
+//! # Testing Without a Device
+//!
+//! The `testdb` module provides comprehensive testing capabilities:
+//!
+//! ```rust,no_run
+//! use photo_extraction_tool::testdb::{TestRunner, ScenarioLibrary};
+//!
+//! // Run all quick test scenarios
+//! let mut runner = TestRunner::new();
+//! let summary = runner.run_quick();
+//! println!("Passed: {}/{}", summary.passed, summary.total);
+//!
+//! // List available scenarios
+//! photo_extraction_tool::testdb::print_available_scenarios();
+//! ```
+//!
 //! # Features
 //!
 //! - **No iTunes Required** - Direct device access via WPD API
@@ -52,6 +69,7 @@
 //! - **Duplicate Detection** - Perceptual hashing to find duplicates
 //! - **Multi-Device Support** - Manage multiple devices with profiles
 //! - **Resume Support** - Continue interrupted extractions
+//! - **Comprehensive Testing** - Test all features without a real device
 //!
 //! # Platform Support
 //!
@@ -64,6 +82,7 @@ pub mod cli;
 pub mod core;
 pub mod device;
 pub mod duplicate;
+pub mod testdb;
 
 /// Library version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

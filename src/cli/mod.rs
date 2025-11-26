@@ -17,6 +17,6 @@ pub mod commands;
 pub mod progress;
 
 // Re-export commonly used types for convenience
-pub use args::{Args, Commands};
+pub use args::{Args, Commands, TestCommands};
 pub use commands::run_command;
 pub use progress::DualWriter;

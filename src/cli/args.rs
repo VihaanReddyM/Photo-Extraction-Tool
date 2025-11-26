@@ -110,4 +110,152 @@ pub enum Commands {
         #[arg(long, default_value = "true")]
         dcim_only: bool,
     },
+
+    /// Run tests using mock devices (no real device required)
+    ///
+    /// This command allows you to test the photo extraction tool
+    /// without connecting a real phone to your PC. It uses simulated
+    /// devices with various test scenarios.
+    Test {
+        #[command(subcommand)]
+        test_command: TestCommands,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum TestCommands {
+    /// Run all available test scenarios
+    RunAll {
+        /// Generate HTML report
+        #[arg(long)]
+        html_report: bool,
+
+        /// Generate JSON report
+        #[arg(long)]
+        json_report: bool,
+
+        /// Output directory for reports
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Stop on first failure
+        #[arg(long)]
+        fail_fast: bool,
+    },
+
+    /// Run quick test scenarios only (fast)
+    RunQuick {
+        /// Verbose output showing detailed results
+        #[arg(short, long)]
+        verbose: bool,
+    },
+
+    /// Run tests filtered by tag
+    RunTag {
+        /// Tag to filter scenarios by
+        /// Available tags: device, error, duplicate, structure, tracking, profile, performance, stress-test, edge-case
+        tag: String,
+
+        /// Verbose output
+        #[arg(short, long)]
+        verbose: bool,
+    },
+
+    /// Run specific test scenarios by name
+    Run {
+        /// Scenario names to run (comma-separated or multiple values)
+        #[arg(value_delimiter = ',')]
+        scenarios: Vec<String>,
+
+        /// Verbose output
+        #[arg(short, long)]
+        verbose: bool,
+    },
+
+    /// List all available test scenarios
+    ListScenarios {
+        /// Filter by tag
+        #[arg(short, long)]
+        tag: Option<String>,
+
+        /// Show detailed information about each scenario
+        #[arg(short, long)]
+        detailed: bool,
+    },
+
+    /// List all available tags for filtering
+    ListTags,
+
+    /// Run interactive test mode
+    ///
+    /// Opens an interactive menu to browse and run test scenarios
+    Interactive,
+
+    /// Show information about a specific scenario
+    Info {
+        /// Name of the scenario to show info about
+        name: String,
+    },
+
+    /// Simulate extraction from a mock device
+    ///
+    /// This performs a simulated extraction using a test scenario,
+    /// writing files to the specified output directory.
+    SimulateExtract {
+        /// Test scenario to use for simulation
+        #[arg(short, long, default_value = "single_iphone")]
+        scenario: String,
+
+        /// Output directory for extracted files
+        #[arg(short, long)]
+        output: PathBuf,
+
+        /// Include progress bar and verbose output
+        #[arg(short, long)]
+        verbose: bool,
+
+        /// Simulate errors and edge cases from scenario
+        #[arg(long)]
+        simulate_errors: bool,
+    },
+
+    /// Generate mock test data files
+    ///
+    /// Creates test files (images/videos) in the specified directory
+    /// for use in testing duplicate detection and other features.
+    GenerateData {
+        /// Output directory for generated files
+        #[arg(short, long)]
+        output: PathBuf,
+
+        /// Number of files to generate
+        #[arg(short, long, default_value = "100")]
+        count: usize,
+
+        /// Types of files to generate (comma-separated)
+        /// Options: jpg, heic, png, mov, mp4, all
+        #[arg(short, long, default_value = "all")]
+        types: String,
+
+        /// Include some duplicate files
+        #[arg(long)]
+        include_duplicates: bool,
+
+        /// Seed for reproducible generation
+        #[arg(long)]
+        seed: Option<u64>,
+    },
+
+    /// Benchmark mock device performance
+    ///
+    /// Tests the performance of various operations using mock devices
+    BenchmarkMock {
+        /// Number of files to test with
+        #[arg(short, long, default_value = "1000")]
+        file_count: usize,
+
+        /// Number of iterations
+        #[arg(short, long, default_value = "5")]
+        iterations: usize,
+    },
 }
