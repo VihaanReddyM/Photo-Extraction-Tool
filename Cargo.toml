@@ -1,0 +1,66 @@
+[package]
+name = "photo_extraction_tool"
+version = "1.0.0"
+edition = "2021"
+description = "A fast, reliable tool to extract photos from iPhone/iPad connected via USB on Windows"
+authors = ["Vihaan Reddy M"]
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/yourusername/photo-extraction-tool"
+keywords = ["iphone", "photos", "backup", "extraction", "windows"]
+categories = ["command-line-utilities", "filesystem"]
+
+[dependencies]
+# Windows API bindings
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_Devices_PortableDevices",
+    "Win32_UI_Shell_PropertiesSystem",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Variant",
+] }
+
+# CLI argument parsing
+clap = { version = "4.5", features = ["derive"] }
+
+# Progress bar
+indicatif = "0.17"
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Date/time handling
+chrono = { version = "0.4", features = ["serde"] }
+
+# Logging
+env_logger = "0.11"
+log = "0.4"
+
+# Configuration file support
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+
+# Signal handling for graceful shutdown
+ctrlc = "3.4"
+
+# Image processing for duplicate detection
+image = { version = "0.23", default-features = false, features = ["jpeg", "png", "gif", "bmp", "webp"] }
+img_hash = "3.2"
+kamadak-exif = "0.5"
+walkdir = "2.5"
+
+# Multi-threading
+rayon = "1.10"
+
+# User input for interactive prompts
+dialoguer = "0.11"
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true
+codegen-units = 1

@@ -1,0 +1,255 @@
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║                    📸 Photo Extraction Tool Configuration                    ║
+# ╠══════════════════════════════════════════════════════════════════════════════╣
+# ║  This configuration file allows you to customize the behavior of the        ║
+# ║  photo extraction tool. Copy this file to `config.toml` and modify          ║
+# ║  the settings below to match your preferences.                              ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+
+# ┌──────────────────────────────────────────────────────────────────────────────┐
+# │                            📁 OUTPUT SETTINGS                                │
+# └──────────────────────────────────────────────────────────────────────────────┘
+[output]
+
+# Directory where photos will be extracted to.
+# Use forward slashes (/) or double backslashes (\\) for Windows paths.
+# Examples:
+#   "./extracted_photos"          - Relative to current directory
+#   "D:/Photos/iPhone Backup"     - Absolute path on Windows
+#   "/home/user/Photos"           - Absolute path on Linux/macOS
+directory = "./extracted_photos"
+
+# Preserve the folder structure from the device (e.g., DCIM/100APPLE/IMG_0001.jpg)
+# Set to `false` to extract all photos into a single flat directory.
+preserve_structure = true
+
+# Skip files that already exist in the destination directory.
+# Useful for incremental backups - only new photos will be extracted.
+# Set to `false` to overwrite existing files.
+skip_existing = true
+
+# Organize photos into YYYY/MM folders based on their creation date.
+# Example: Photos taken in March 2024 → "2024/03/IMG_0001.jpg"
+# Note: This overrides preserve_structure when enabled.
+organize_by_date = false
+
+# Create a subfolder named after the device.
+# Example: "extracted_photos/John's iPhone 15/..."
+subfolder_by_device = false
+
+
+# ┌──────────────────────────────────────────────────────────────────────────────┐
+# │                            📱 DEVICE SETTINGS                                │
+# └──────────────────────────────────────────────────────────────────────────────┘
+[device]
+
+# Specific device ID to use for extraction.
+# Leave commented out for auto-detection (recommended for most users).
+# Use `--list-devices` command to find your device ID.
+# device_id = "\\\\?\\usb#vid_05ac&pid_12a8#..."
+
+# Filter devices by name (partial match, case-insensitive).
+# Useful when you have multiple devices and want to target a specific one.
+# Examples:
+#   "iPhone"        - Match any iPhone
+#   "iPhone 15"     - Match iPhone 15 specifically
+#   "iPad Pro"      - Match iPad Pro
+# device_name_filter = "iPhone"
+
+# Only show Apple devices (iPhone, iPad, iPod).
+# Set to `false` to also detect Android phones, cameras, and other MTP devices.
+apple_only = true
+
+
+# ┌──────────────────────────────────────────────────────────────────────────────┐
+# │                          🎯 EXTRACTION SETTINGS                              │
+# └──────────────────────────────────────────────────────────────────────────────┘
+[extraction]
+
+# Only extract from the DCIM folder (Camera Roll).
+# Set to `false` to scan the entire device storage (may include app data, etc.)
+dcim_only = true
+
+# File extensions to INCLUDE in extraction.
+# Leave empty [] to include all supported photo and video types.
+# Examples:
+#   ["jpg", "jpeg", "heic"]           - Only JPEG and HEIC photos
+#   ["mov", "mp4"]                    - Only videos
+#   ["heic", "heif", "dng"]           - Only modern formats and RAW
+include_extensions = []
+
+# File extensions to EXCLUDE from extraction.
+# These will be skipped even if they match include_extensions.
+# Example: ["aae"] to skip Apple's sidecar edit files
+exclude_extensions = []
+
+# Minimum file size in bytes (0 = no minimum).
+# Useful for filtering out thumbnails or corrupted files.
+# Examples:
+#   0           - No minimum (extract everything)
+#   1024        - Skip files smaller than 1 KB
+#   102400      - Skip files smaller than 100 KB
+min_file_size = 0
+
+# Maximum file size in bytes (0 = no maximum).
+# Useful for skipping large video files if you only want photos.
+# Examples:
+#   0             - No maximum (extract everything)
+#   10485760      - Skip files larger than 10 MB
+#   104857600     - Skip files larger than 100 MB
+max_file_size = 0
+
+# Include photo files in extraction.
+# Supported formats: JPEG, PNG, HEIC/HEIF, GIF, WebP, RAW, TIFF, BMP, DNG
+include_photos = true
+
+# Include video files in extraction.
+# Supported formats: MOV, MP4, M4V, AVI, 3GP
+include_videos = true
+
+
+# ┌──────────────────────────────────────────────────────────────────────────────┐
+# │                            📋 LOGGING SETTINGS                               │
+# └──────────────────────────────────────────────────────────────────────────────┘
+[logging]
+
+# Log verbosity level. Options (from least to most verbose):
+#   "error"   - Only show errors
+#   "warn"    - Show warnings and errors
+#   "info"    - Show general information (recommended)
+#   "debug"   - Show detailed debug information
+#   "trace"   - Show everything (very verbose)
+level = "info"
+
+# Enable logging to a file in addition to console output.
+# Useful for troubleshooting or keeping extraction history.
+log_to_file = false
+
+# Path to the log file (only used if log_to_file = true).
+log_file = "./photo_extraction.log"
+
+
+# ┌──────────────────────────────────────────────────────────────────────────────┐
+# │                       🔍 DUPLICATE DETECTION SETTINGS                        │
+# └──────────────────────────────────────────────────────────────────────────────┘
+# This feature compares photos from your device against existing photos on your
+# computer to avoid extracting duplicates. Useful for consolidating photo libraries.
+
+[duplicate_detection]
+
+# Enable duplicate detection.
+# When enabled, the tool will skip photos that already exist in comparison_folders.
+enabled = false
+
+# Folders to scan for existing photos to compare against.
+# The tool will hash all images in these folders to build a comparison database.
+# Use absolute paths for reliability.
+# Examples:
+#   comparison_folders = ["D:/Photos", "D:/Backup/Old iPhone"]
+#   comparison_folders = ["C:/Users/John/Pictures", "E:/Photo Archive"]
+comparison_folders = []
+
+# Hash algorithm for comparing photos. Options:
+#   "perceptual"  - Visual similarity comparison (recommended)
+#                   Works even if photos are resized or re-encoded
+#   "exif"        - Compare by metadata (date taken, dimensions)
+#                   Fast but may miss duplicates with different metadata
+#   "size"        - Compare by file size only
+#                   Very fast but least accurate
+hash_algorithm = "perceptual"
+
+# Hash size for perceptual hashing. Options: 8, 16, or 32
+# Larger values are more accurate but slower to compute.
+#   8   - Fast, good for most cases (recommended)
+#   16  - More accurate, moderate speed
+#   32  - Most accurate, slower
+hash_size = 8
+
+# Similarity threshold for perceptual hash matching.
+# This is the maximum Hamming distance between hashes to consider a match.
+#   0   - Exact match only
+#   5   - Similar images (recommended - catches resized/re-encoded photos)
+#   10+ - Loose matching (may produce false positives)
+similarity_threshold = 5
+
+# Cache the hash index for faster subsequent runs.
+# The first run will build the index (may take time for large libraries).
+# Subsequent runs will load from cache and only hash new files.
+cache_index = true
+
+# Path to the cache file (stores hashed photo fingerprints).
+cache_file = "./photo_hash_cache.bin"
+
+# Action to take when a duplicate is found. Options:
+#   "skip"      - Don't extract the duplicate (recommended)
+#   "overwrite" - Replace the existing file with the new one
+#   "rename"    - Keep both by adding a suffix to the new file
+duplicate_action = "skip"
+
+
+# ┌──────────────────────────────────────────────────────────────────────────────┐
+# │                         👥 DEVICE PROFILES SETTINGS                          │
+# └──────────────────────────────────────────────────────────────────────────────┘
+# Device profiles automatically organize photos by device.
+# Each device gets its own folder, making it easy to back up multiple phones.
+
+[device_profiles]
+
+# Enable device profiles feature.
+# When enabled, each device will have its own subfolder under backup_base_folder.
+# This overrides output.directory for organizing photos.
+enabled = false
+
+# Base folder where device subfolders will be created.
+# Example: If set to "D:/Photos", iPhone photos go to "D:/Photos/iPhone_Name/"
+backup_base_folder = "D:/Photos"
+
+# Path to the profiles database file.
+# This JSON file stores device information and their folder mappings.
+profiles_file = "./.device_profiles.json"
+
+
+# ┌──────────────────────────────────────────────────────────────────────────────┐
+# │                          📊 TRACKING SETTINGS                                │
+# └──────────────────────────────────────────────────────────────────────────────┘
+# Tracking remembers which files have been extracted, enabling resume support
+# and efficient incremental backups.
+
+[tracking]
+
+# Enable tracking of extraction state.
+# When enabled, the tool remembers which files have been extracted.
+enabled = true
+
+# Name of the hidden tracking file (stored in output directory).
+# This file is automatically created and updated during extraction.
+tracking_filename = ".photo_extraction_state.json"
+
+# Track individual files that have been extracted.
+# Enables resume support - if extraction is interrupted, it will continue
+# from where it left off on the next run.
+track_extracted_files = true
+
+
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║                              QUICK START GUIDE                               ║
+# ╠══════════════════════════════════════════════════════════════════════════════╣
+# ║                                                                              ║
+# ║  1. Copy this file to `config.toml` in the same directory as the tool       ║
+# ║                                                                              ║
+# ║  2. Basic backup (most users):                                               ║
+# ║     - Set output.directory to your preferred backup location                 ║
+# ║     - Leave other settings at defaults                                       ║
+# ║                                                                              ║
+# ║  3. Multiple devices:                                                        ║
+# ║     - Enable device_profiles.enabled = true                                  ║
+# ║     - Set device_profiles.backup_base_folder                                 ║
+# ║                                                                              ║
+# ║  4. Avoid duplicates:                                                        ║
+# ║     - Enable duplicate_detection.enabled = true                              ║
+# ║     - Add existing photo folders to comparison_folders                       ║
+# ║                                                                              ║
+# ║  5. Photos only (no videos):                                                 ║
+# ║     - Set extraction.include_videos = false                                  ║
+# ║                                                                              ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
