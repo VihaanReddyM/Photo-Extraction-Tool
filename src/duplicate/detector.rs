@@ -6,8 +6,8 @@
 //! This module builds an index of existing photos from specified folders and
 //! compares incoming photos against this index to avoid extracting duplicates.
 
-use crate::config::{DuplicateDetectionConfig, HashAlgorithm};
-use crate::error::{ExtractionError, Result};
+use crate::core::config::{DuplicateDetectionConfig, HashAlgorithm};
+use crate::core::error::{ExtractionError, Result};
 use img_hash::{HasherConfig, ImageHash};
 use indicatif::{ProgressBar, ProgressStyle};
 use log::{debug, info, trace, warn};

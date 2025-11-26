@@ -1,0 +1,675 @@
+//! Command handler implementations
+//!
+//! This module contains the implementation of all CLI commands.
+
+use crate::cli::progress::{BenchmarkProgress, ScanProgressTracker};
+use crate::cli::{Args, Commands};
+use crate::core::config::{get_config_path, init_config, open_config_in_editor, Config};
+use crate::core::extractor;
+use crate::device::{self, ProfileManager};
+use anyhow::Result;
+use log::{error, info, warn};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
+/// Run the appropriate command based on CLI arguments
+pub fn run_command(args: &Args, config: &Config, shutdown_flag: Arc<AtomicBool>) -> Result<()> {
+    match &args.command {
+        Some(Commands::Config { path, reset }) => {
+            handle_config_command(*path, *reset)?;
+        }
+        Some(Commands::GenerateConfig { output }) => {
+            generate_config_file(output.clone())?;
+        }
+        Some(Commands::ShowConfig) => {
+            show_config(config);
+        }
+        Some(Commands::List { all }) => {
+            let use_all = *all || !config.device.apple_only;
+            list_devices(use_all)?;
+        }
+        Some(Commands::Scan { depth }) => {
+            scan_device(config, *depth)?;
+        }
+        Some(Commands::Extract) | None => {
+            extract_photos(config, shutdown_flag)?;
+        }
+        Some(Commands::ListProfiles) => {
+            list_profiles(config)?;
+        }
+        Some(Commands::RemoveProfile { name }) => {
+            remove_profile(config, name)?;
+        }
+        Some(Commands::BenchmarkScan { dcim_only }) => {
+            benchmark_scan(config, *dcim_only)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// List all configured device profiles
+pub fn list_profiles(config: &Config) -> Result<()> {
+    let mut manager = ProfileManager::new(&config.device_profiles);
+    manager.load().ok();
+    manager.list_profiles();
+    Ok(())
+}
+
+/// Remove a device profile by name or partial ID
+pub fn remove_profile(config: &Config, name: &str) -> Result<()> {
+    let mut manager = ProfileManager::new(&config.device_profiles);
+    manager.load()?;
+
+    // Find profile by name or partial device ID
+    let profiles = manager.get_all_profiles().clone();
+    let mut found_id: Option<String> = None;
+
+    for (id, profile) in &profiles {
+        if profile.name.to_lowercase().contains(&name.to_lowercase())
+            || id.to_lowercase().contains(&name.to_lowercase())
+        {
+            found_id = Some(id.clone());
+            info!(
+                "Found profile: {} -> {}",
+                profile.name, profile.output_folder
+            );
+            break;
+        }
+    }
+
+    if let Some(id) = found_id {
+        if let Some(profile) = manager.remove_profile(&id) {
+            manager.save()?;
+            info!("Removed profile: {}", profile.name);
+        }
+    } else {
+        error!("No profile found matching: {}", name);
+    }
+
+    Ok(())
+}
+
+/// Handle the `config` command - open, show path, or reset the config file
+pub fn handle_config_command(show_path: bool, reset: bool) -> Result<()> {
+    if reset {
+        // Delete existing config and create a fresh one
+        if let Some(config_path) = get_config_path() {
+            if config_path.exists() {
+                std::fs::remove_file(&config_path)?;
+                info!("Removed existing config file");
+            }
+        }
+        let path = init_config()?;
+        info!("Created fresh config file at: {}", path.display());
+        return Ok(());
+    }
+
+    if show_path {
+        // Just show the path
+        let path = Config::get_active_config_path();
+        println!("{}", path.display());
+        if path.exists() {
+            info!("Config file exists at: {}", path.display());
+        } else {
+            info!("Config file would be created at: {}", path.display());
+        }
+        return Ok(());
+    }
+
+    // Open the config file in the default editor
+    info!("Opening configuration file in default editor...");
+    match open_config_in_editor() {
+        Ok(path) => {
+            info!("Config file: {}", path.display());
+            info!("Save the file after editing to apply changes.");
+            info!("Run 'photo_extraction_tool show-config' to verify your settings.");
+        }
+        Err(e) => {
+            error!("Failed to open config file: {}", e);
+            // Fall back to showing the path
+            if let Some(path) = get_config_path() {
+                info!("You can manually edit the config at: {}", path.display());
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Generate a configuration file at the specified or default location
+pub fn generate_config_file(output: Option<PathBuf>) -> Result<()> {
+    use std::fs;
+
+    let custom_path = output.is_some();
+    let output_path = match output {
+        Some(path) => path,
+        None => {
+            // Use standard location
+            init_config()?
+        }
+    };
+
+    // If a specific path was given, write the config there
+    if custom_path {
+        let content = Config::generate_default_config();
+        fs::write(&output_path, content)?;
+    }
+
+    info!("Configuration file: {}", output_path.display());
+    info!("Edit this file to customize the extraction settings.");
+    info!("");
+    info!("Quick tip: Run 'photo_extraction_tool config' to open the config in your editor.");
+
+    Ok(())
+}
+
+/// Show the current configuration settings
+pub fn show_config(config: &Config) {
+    let config_path = Config::get_active_config_path();
+    info!("Configuration file: {}", config_path.display());
+    if !config_path.exists() {
+        info!("(Using default settings - no config file found)");
+    }
+    info!("");
+    info!("Current Configuration:");
+    info!("----------------------");
+    info!("[output]");
+    info!("  directory = \"{}\"", config.output.directory.display());
+    info!(
+        "  preserve_structure = {}",
+        config.output.preserve_structure
+    );
+    info!("  skip_existing = {}", config.output.skip_existing);
+    info!("  organize_by_date = {}", config.output.organize_by_date);
+    info!(
+        "  subfolder_by_device = {}",
+        config.output.subfolder_by_device
+    );
+    info!("");
+    info!("[device]");
+    info!(
+        "  device_id = {:?}",
+        config.device.device_id.as_deref().unwrap_or("(auto)")
+    );
+    info!(
+        "  device_name_filter = {:?}",
+        config
+            .device
+            .device_name_filter
+            .as_deref()
+            .unwrap_or("(none)")
+    );
+    info!("  apple_only = {}", config.device.apple_only);
+    info!("");
+    info!("[extraction]");
+    info!("  dcim_only = {}", config.extraction.dcim_only);
+    info!(
+        "  include_extensions = {:?}",
+        config.extraction.include_extensions
+    );
+    info!(
+        "  exclude_extensions = {:?}",
+        config.extraction.exclude_extensions
+    );
+    info!("  include_photos = {}", config.extraction.include_photos);
+    info!("  include_videos = {}", config.extraction.include_videos);
+    info!("");
+    info!("[logging]");
+    info!("  level = \"{}\"", config.logging.level);
+}
+
+/// List connected devices
+pub fn list_devices(all_devices: bool) -> Result<()> {
+    // Initialize COM library (required for WPD)
+    let _com_guard = device::initialize_com()?;
+
+    // Create device manager
+    let manager = device::DeviceManager::new()?;
+
+    info!("Scanning for connected devices...");
+
+    let devices = if all_devices {
+        manager.enumerate_all_devices()?
+    } else {
+        manager.enumerate_apple_devices()?
+    };
+
+    if devices.is_empty() {
+        info!("No portable devices found.");
+        info!("");
+        info!("Make sure your iPhone is:");
+        info!("  1. Connected via USB cable");
+        info!("  2. Unlocked");
+        info!("  3. Trusting this computer (tap 'Trust' when prompted)");
+        info!("");
+        if !all_devices {
+            info!("Tip: Use 'list --all' to see all portable devices");
+        }
+        return Ok(());
+    }
+
+    info!("Found {} device(s):", devices.len());
+    info!("");
+    for (i, device) in devices.iter().enumerate() {
+        info!("[{}] {}", i + 1, device.friendly_name);
+        info!("    Manufacturer: {}", device.manufacturer);
+        info!("    Model: {}", device.model);
+        info!("    Device ID: {}", device.device_id);
+        info!("");
+    }
+
+    Ok(())
+}
+
+/// Scan device and show folder structure
+pub fn scan_device(config: &Config, max_depth: usize) -> Result<()> {
+    // Initialize COM library
+    let _com_guard = device::initialize_com()?;
+
+    // Create device manager
+    let manager = device::DeviceManager::new()?;
+
+    info!("Scanning for connected devices...");
+
+    let devices = if config.device.apple_only {
+        manager.enumerate_apple_devices()?
+    } else {
+        manager.enumerate_all_devices()?
+    };
+
+    if devices.is_empty() {
+        error!("No devices found.");
+        return Ok(());
+    }
+
+    // Select device
+    let target_device = select_device(&devices, &config.device.device_id)?;
+    info!("Selected device: {}", target_device.friendly_name);
+
+    // Open device
+    let device = manager.open_device(&target_device.device_id)?;
+    let content = device.get_content()?;
+
+    info!("Scanning device structure (max depth: {})...", max_depth);
+    info!("");
+
+    // Create progress tracker
+    let progress = ScanProgressTracker::new();
+
+    // Scan and print structure
+    scan_recursive(&content, "DEVICE", "", 0, max_depth, &progress)?;
+
+    progress.finish();
+
+    Ok(())
+}
+
+/// Benchmark scan performance
+pub fn benchmark_scan(config: &Config, dcim_only: bool) -> Result<()> {
+    use std::time::Instant;
+
+    // Initialize COM library
+    let _com_guard = device::initialize_com()?;
+
+    // Create device manager
+    let manager = device::DeviceManager::new()?;
+
+    info!("=== Photo Discovery Benchmark ===");
+    info!("");
+
+    let devices = if config.device.apple_only {
+        manager.enumerate_apple_devices()?
+    } else {
+        manager.enumerate_all_devices()?
+    };
+
+    if devices.is_empty() {
+        error!("No devices found.");
+        return Ok(());
+    }
+
+    // Select device
+    let target_device = select_device(&devices, &config.device.device_id)?;
+    info!("Device: {}", target_device.friendly_name);
+    info!("DCIM only: {}", dcim_only);
+    info!("");
+
+    // Open device
+    let device = manager.open_device(&target_device.device_id)?;
+    let content = device.get_content()?;
+
+    // Create progress tracker
+    let progress = BenchmarkProgress::new();
+
+    info!("Starting scan benchmark...");
+    let start = Instant::now();
+
+    // Scan for files
+    let root_objects = content.enumerate_objects()?;
+    progress.log_event(&format!("Found {} root objects", root_objects.len()));
+
+    let mut total_folders = 0usize;
+    let mut total_files = 0usize;
+    let mut media_files = 0usize;
+
+    for obj in root_objects {
+        if obj.is_folder {
+            benchmark_scan_recursive(
+                &content,
+                &obj.object_id,
+                &obj.name,
+                dcim_only,
+                &progress,
+                &mut total_folders,
+                &mut total_files,
+                &mut media_files,
+            )?;
+        }
+    }
+
+    let elapsed = start.elapsed();
+    progress.finish();
+
+    // Print summary
+    info!("");
+    info!("=== Benchmark Results ===");
+    info!("Total time: {:.2}s", elapsed.as_secs_f64());
+    info!("Folders scanned: {}", total_folders);
+    info!("Total files found: {}", total_files);
+    info!("Media files found: {}", media_files);
+    if elapsed.as_secs_f64() > 0.0 {
+        info!(
+            "Scan rate: {:.1} items/second",
+            (total_folders + total_files) as f64 / elapsed.as_secs_f64()
+        );
+    }
+    info!("");
+
+    Ok(())
+}
+
+/// Extract photos from the connected device
+pub fn extract_photos(config: &Config, shutdown_flag: Arc<AtomicBool>) -> Result<()> {
+    // Initialize COM library (required for WPD)
+    let _com_guard = device::initialize_com()?;
+
+    // Create device manager
+    let manager = device::DeviceManager::new()?;
+
+    info!("Scanning for connected devices...");
+
+    let devices = if config.device.apple_only {
+        manager.enumerate_apple_devices()?
+    } else {
+        manager.enumerate_all_devices()?
+    };
+
+    if devices.is_empty() {
+        error!("No portable devices found.");
+        error!("");
+        error!("Make sure your iPhone is:");
+        error!("  1. Connected via USB cable");
+        error!("  2. Unlocked");
+        error!("  3. Trusting this computer (tap 'Trust' when prompted)");
+        error!("");
+        error!("Use 'list' command to see available devices");
+        error!("Use '--all-devices' to see all portable devices (not just Apple)");
+        return Ok(());
+    }
+
+    // Select device
+    let target_device = select_device(&devices, &config.device.device_id)?;
+    info!("Selected device: {}", target_device.friendly_name);
+
+    // Determine output directory - use device profiles if enabled
+    let output_dir = if config.device_profiles.enabled {
+        let mut profile_manager = ProfileManager::new(&config.device_profiles);
+        profile_manager.load().ok(); // Ignore error if file doesn't exist
+
+        let profile = profile_manager.get_or_create_profile(target_device)?;
+        let output_path = config
+            .device_profiles
+            .backup_base_folder
+            .join(&profile.output_folder);
+
+        info!(
+            "Using profile '{}' -> {}",
+            profile.name,
+            output_path.display()
+        );
+        output_path
+    } else {
+        config.output.directory.clone()
+    };
+
+    // Create output directory if it doesn't exist
+    if !output_dir.exists() {
+        std::fs::create_dir_all(&output_dir)?;
+        info!("Created output directory: {}", output_dir.display());
+    }
+
+    // Convert config to extraction config
+    let extraction_config = extractor::ExtractionConfig {
+        output_dir: output_dir.clone(),
+        dcim_only: config.extraction.dcim_only,
+        preserve_structure: config.output.preserve_structure,
+        skip_existing: config.output.skip_existing,
+        duplicate_detection: if config.duplicate_detection.enabled {
+            Some(config.duplicate_detection.clone())
+        } else {
+            None
+        },
+        tracking: if config.tracking.enabled {
+            Some(config.tracking.clone())
+        } else {
+            None
+        },
+    };
+
+    let stats = extractor::extract_photos(target_device, extraction_config, shutdown_flag.clone())?;
+
+    // Check if we were interrupted
+    if shutdown_flag.load(Ordering::SeqCst) {
+        warn!("Extraction was interrupted by user");
+    }
+
+    info!("============================");
+    info!("Extraction complete!");
+    info!("  Photos extracted: {}", stats.files_extracted);
+    info!("  Files skipped: {}", stats.files_skipped);
+    info!("  Duplicates skipped: {}", stats.duplicates_skipped);
+    info!("  Duplicates overwritten: {}", stats.duplicates_overwritten);
+    info!("  Duplicates renamed: {}", stats.duplicates_renamed);
+    info!("  Errors: {}", stats.errors);
+    info!(
+        "  Total size: {:.2} MB",
+        stats.total_bytes as f64 / 1_048_576.0
+    );
+    info!("  Output: {}", output_dir.display());
+
+    Ok(())
+}
+
+// ============================================================================
+// Helper functions
+// ============================================================================
+
+/// Select a device from the list based on device ID or return single device
+fn select_device<'a>(
+    devices: &'a [device::DeviceInfo],
+    device_id: &Option<String>,
+) -> Result<&'a device::DeviceInfo> {
+    if let Some(ref id) = device_id {
+        // Try to find by ID or name
+        devices
+            .iter()
+            .find(|d| d.device_id == *id || d.friendly_name.contains(id))
+            .ok_or_else(|| anyhow::anyhow!("Device '{}' not found", id))
+    } else if devices.len() == 1 {
+        Ok(&devices[0])
+    } else {
+        info!("Multiple devices found. Please specify a device with --device-id:");
+        info!("");
+        for device in devices {
+            info!("  {} (ID: {})", device.friendly_name, device.device_id);
+        }
+        info!("");
+        info!(
+            "Example: photo_extraction_tool --device-id \"{}\"",
+            devices[0].device_id
+        );
+        Err(anyhow::anyhow!(
+            "Multiple devices found, please specify one"
+        ))
+    }
+}
+
+/// Recursively scan and print device structure
+fn scan_recursive(
+    content: &device::DeviceContent,
+    object_id: &str,
+    prefix: &str,
+    depth: usize,
+    max_depth: usize,
+    progress: &ScanProgressTracker,
+) -> Result<()> {
+    if max_depth > 0 && depth >= max_depth {
+        return Ok(());
+    }
+
+    let children = content.enumerate_children(object_id)?;
+
+    let mut file_count = 0;
+    for (i, child) in children.iter().enumerate() {
+        let is_last = i == children.len() - 1;
+        let connector = if is_last { "└── " } else { "├── " };
+        let child_prefix = if is_last { "    " } else { "│   " };
+
+        let size_str = if child.size > 0 {
+            format!(" ({} bytes)", child.size)
+        } else {
+            String::new()
+        };
+
+        let type_str = if child.is_folder { "[DIR]" } else { "[FILE]" };
+
+        info!(
+            "{}{}{} {}{}",
+            prefix, connector, type_str, child.name, size_str
+        );
+
+        if child.is_folder {
+            progress.increment_folders();
+            let new_prefix = format!("{}{}", prefix, child_prefix);
+            scan_recursive(
+                content,
+                &child.object_id,
+                &new_prefix,
+                depth + 1,
+                max_depth,
+                progress,
+            )?;
+        } else {
+            file_count += 1;
+        }
+    }
+
+    if file_count > 0 {
+        progress.add_files(file_count);
+    }
+
+    Ok(())
+}
+
+/// Recursively scan for benchmark statistics
+#[allow(clippy::too_many_arguments)]
+fn benchmark_scan_recursive(
+    content: &device::DeviceContent,
+    object_id: &str,
+    path: &str,
+    dcim_only: bool,
+    progress: &BenchmarkProgress,
+    total_folders: &mut usize,
+    total_files: &mut usize,
+    media_files: &mut usize,
+) -> Result<()> {
+    *total_folders += 1;
+    progress.update(*total_folders, *total_files, *media_files);
+
+    let children = match content.enumerate_children(object_id) {
+        Ok(c) => c,
+        Err(e) => {
+            warn!("Failed to enumerate '{}': {}", path, e);
+            return Ok(());
+        }
+    };
+
+    // If dcim_only, skip non-DCIM paths (but always scan to find DCIM)
+    let is_dcim_path = path.to_uppercase().contains("DCIM");
+
+    for child in children {
+        let child_path = format!("{}/{}", path, child.name);
+
+        if child.is_folder {
+            // If dcim_only and we're not in DCIM yet, only recurse if this might lead to DCIM
+            if dcim_only && !is_dcim_path {
+                // Check if this is the DCIM folder or might contain it
+                let child_upper = child.name.to_uppercase();
+                if child_upper == "DCIM"
+                    || child_upper == "INTERNAL STORAGE"
+                    || child_upper.contains("STORAGE")
+                {
+                    benchmark_scan_recursive(
+                        content,
+                        &child.object_id,
+                        &child_path,
+                        dcim_only,
+                        progress,
+                        total_folders,
+                        total_files,
+                        media_files,
+                    )?;
+                }
+            } else {
+                benchmark_scan_recursive(
+                    content,
+                    &child.object_id,
+                    &child_path,
+                    dcim_only,
+                    progress,
+                    total_folders,
+                    total_files,
+                    media_files,
+                )?;
+            }
+        } else {
+            *total_files += 1;
+
+            // Check if it's a media file
+            let ext = std::path::Path::new(&child.name)
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.to_lowercase())
+                .unwrap_or_default();
+
+            let photo_exts = [
+                "jpg", "jpeg", "png", "heic", "heif", "gif", "webp", "raw", "dng", "tiff", "tif",
+                "bmp",
+            ];
+            let video_exts = ["mov", "mp4", "m4v", "avi", "3gp"];
+
+            if photo_exts.contains(&ext.as_str()) || video_exts.contains(&ext.as_str()) {
+                *media_files += 1;
+            }
+
+            // Update progress every 100 files
+            if (*total_files).is_multiple_of(100) {
+                progress.update(*total_folders, *total_files, *media_files);
+            }
+        }
+    }
+
+    Ok(())
+}

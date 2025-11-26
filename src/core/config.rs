@@ -48,8 +48,7 @@ pub fn get_config_path() -> Option<PathBuf> {
 ///
 /// Creates the directory and all parent directories if they don't exist.
 pub fn ensure_config_dir() -> Result<PathBuf, ConfigError> {
-    let config_dir = get_config_dir()
-        .ok_or_else(|| ConfigError::ConfigDirNotFound)?;
+    let config_dir = get_config_dir().ok_or_else(|| ConfigError::ConfigDirNotFound)?;
 
     if !config_dir.exists() {
         fs::create_dir_all(&config_dir)
@@ -494,7 +493,7 @@ impl Config {
     /// Generate a default config file with comments
     /// This uses the example config file to ensure it stays up to date
     pub fn generate_default_config() -> String {
-        include_str!("../config.example.toml").to_string()
+        include_str!("../../config.example.toml").to_string()
     }
 }
 

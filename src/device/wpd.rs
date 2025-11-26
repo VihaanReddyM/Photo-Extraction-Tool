@@ -6,7 +6,7 @@
 //! Some struct fields and functions are kept for API completeness
 //! even if not currently used by the main application.
 
-use crate::error::{ExtractionError, Result};
+use crate::core::error::{ExtractionError, Result};
 use log::{debug, info, trace, warn};
 use std::ptr::null_mut;
 use windows::{

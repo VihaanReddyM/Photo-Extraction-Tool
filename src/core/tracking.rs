@@ -7,9 +7,9 @@
 //!
 //! Some accessor methods are kept for API completeness and future use.
 
-use crate::config::TrackingConfig;
-use crate::device::DeviceInfo;
-use crate::error::{ExtractionError, Result};
+use crate::core::config::TrackingConfig;
+use crate::core::error::{ExtractionError, Result};
+use crate::device::wpd::DeviceInfo;
 use chrono::{DateTime, Utc};
 use log::{debug, info, trace, warn};
 use serde::{Deserialize, Serialize};

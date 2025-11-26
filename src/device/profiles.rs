@@ -5,9 +5,9 @@
 //!
 //! Some accessor methods are kept for API completeness and future use.
 
-use crate::config::{DeviceProfile, DeviceProfilesConfig};
-use crate::device::DeviceInfo;
-use crate::error::{ExtractionError, Result};
+use crate::core::config::{DeviceProfile, DeviceProfilesConfig};
+use crate::core::error::{ExtractionError, Result};
+use crate::device::wpd::DeviceInfo;
 use chrono::Utc;
 use dialoguer::{Confirm, Input};
 use log::{debug, info, warn};

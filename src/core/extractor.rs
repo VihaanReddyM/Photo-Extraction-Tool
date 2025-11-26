@@ -7,11 +7,11 @@
 //! - Duplicate detection integration
 //! - State tracking for resume support
 
-use crate::config::{DuplicateAction, DuplicateDetectionConfig, TrackingConfig};
-use crate::device::{DeviceContent, DeviceInfo, DeviceManager, DeviceObject};
-use crate::duplicate::PhotoHashIndex;
-use crate::error::{ExtractionError, Result};
-use crate::tracking::StateTracker;
+use crate::core::config::{DuplicateAction, DuplicateDetectionConfig, TrackingConfig};
+use crate::core::error::{ExtractionError, Result};
+use crate::core::tracking::StateTracker;
+use crate::device::wpd::{DeviceContent, DeviceInfo, DeviceManager, DeviceObject};
+use crate::duplicate::detector::PhotoHashIndex;
 use indicatif::{ProgressBar, ProgressStyle};
 use log::{debug, info, trace, warn};
 use std::fs::{self, File};

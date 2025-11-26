@@ -415,6 +415,50 @@ extracted_photos/
 
 ---
 
+## 📁 Project Structure
+
+The project is organized for scalability and to support future UI development:
+
+```
+src/
+├── main.rs              # CLI binary entry point (thin wrapper)
+├── lib.rs               # Library root - exports public API
+├── cli/                 # CLI-specific code
+│   ├── mod.rs           # CLI module exports
+│   ├── args.rs          # Command-line argument definitions
+│   ├── commands.rs      # Command handler implementations
+│   └── progress.rs      # Progress bars and CLI output utilities
+├── core/                # Core business logic
+│   ├── mod.rs           # Core module exports
+│   ├── config.rs        # Configuration types and loading
+│   ├── error.rs         # Error types and result aliases
+│   ├── extractor.rs     # Main extraction logic
+│   └── tracking.rs      # Extraction state and session tracking
+├── device/              # Device interaction
+│   ├── mod.rs           # Device module exports
+│   ├── wpd.rs           # Windows Portable Devices API wrapper
+│   └── profiles.rs      # Device profile management
+└── duplicate/           # Duplicate detection
+    ├── mod.rs           # Duplicate module exports
+    └── detector.rs      # Photo hash index and duplicate detection
+```
+
+### Architecture Overview
+
+- **`lib.rs`** - Library crate that exposes the public API, allowing the core functionality to be reused by other applications (e.g., a future GUI)
+- **`cli/`** - All CLI-specific code is isolated here, making it easy to add alternative interfaces
+- **`core/`** - Business logic that's independent of the interface (config, extraction, tracking)
+- **`device/`** - Hardware interaction layer (WPD API, device profiles)
+- **`duplicate/`** - Duplicate detection algorithms (perceptual hashing, EXIF, etc.)
+
+This separation allows for:
+- Easy addition of a GUI without modifying core logic
+- Reusable library for other Rust projects
+- Clear boundaries between concerns
+- Simplified testing of individual components
+
+---
+
 ## 🔨 Building from Source
 
 ### Prerequisites
@@ -441,6 +485,26 @@ cargo build --release
 ```bash
 cargo test
 ```
+
+---
+
+## 🖥️ Future: GUI Support
+
+The project structure is designed to support adding a graphical user interface. A future `ui/` module could be added:
+
+```
+src/
+├── ui/                  # (Future) GUI implementation
+│   ├── mod.rs
+│   ├── app.rs           # Main application window
+│   ├── components/      # Reusable UI components
+│   └── views/           # Different screens/views
+```
+
+The core library (`lib.rs`) exposes all necessary functionality, so a GUI would simply:
+1. Import the library: `use photo_extraction_tool::core::*;`
+2. Call the same functions the CLI uses
+3. Display progress and results in a graphical interface
 
 ---
 

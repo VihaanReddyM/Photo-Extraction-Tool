@@ -1,0 +1,72 @@
+//! Photo Extraction Tool Library
+//!
+//! A fast, reliable library for extracting photos and videos from iOS devices
+//! (iPhone/iPad) on Windows using the Windows Portable Devices (WPD) API.
+//!
+//! # Architecture
+//!
+//! The library is organized into the following modules:
+//!
+//! - [`core`] - Core functionality including configuration, error handling,
+//!   extraction logic, and state tracking
+//! - [`device`] - Device interaction via Windows Portable Devices API
+//! - [`duplicate`] - Duplicate detection using perceptual hashing and other methods
+//! - [`cli`] - Command-line interface (only used by the binary)
+//!
+//! # Example Usage
+//!
+//! ```rust,no_run
+//! use photo_extraction_tool::core::config::Config;
+//! use photo_extraction_tool::core::extractor;
+//! use photo_extraction_tool::device::{DeviceManager, initialize_com};
+//! use std::sync::Arc;
+//! use std::sync::atomic::AtomicBool;
+//!
+//! fn main() -> anyhow::Result<()> {
+//!     // Initialize COM (required for WPD on Windows)
+//!     let _com_guard = initialize_com()?;
+//!
+//!     // Load configuration
+//!     let config = Config::load_default()?;
+//!
+//!     // Create device manager and find devices
+//!     let manager = DeviceManager::new()?;
+//!     let devices = manager.enumerate_apple_devices()?;
+//!
+//!     if let Some(device) = devices.first() {
+//!         // Set up shutdown flag for graceful termination
+//!         let shutdown_flag = Arc::new(AtomicBool::new(false));
+//!
+//!         // Extract photos
+//!         // ... (see extractor module for details)
+//!     }
+//!
+//!     Ok(())
+//! }
+//! ```
+//!
+//! # Features
+//!
+//! - **No iTunes Required** - Direct device access via WPD API
+//! - **Incremental Backups** - Track extracted files to avoid re-downloading
+//! - **Duplicate Detection** - Perceptual hashing to find duplicates
+//! - **Multi-Device Support** - Manage multiple devices with profiles
+//! - **Resume Support** - Continue interrupted extractions
+//!
+//! # Platform Support
+//!
+//! This library currently only supports Windows due to its reliance on the
+//! Windows Portable Devices API. Future versions may add support for other
+//! platforms using different backends.
+
+// Core modules - always available
+pub mod cli;
+pub mod core;
+pub mod device;
+pub mod duplicate;
+
+/// Library version
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Library name
+pub const NAME: &str = env!("CARGO_PKG_NAME");
