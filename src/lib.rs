@@ -10,9 +10,10 @@
 //! - [`core`] - Core functionality including configuration, error handling,
 //!   extraction logic, and state tracking
 //! - [`device`] - Device interaction via Windows Portable Devices API
-//! - [`duplicate`] - Duplicate detection using perceptual hashing and other methods
+//! - [`duplicate`] - Duplicate detection using SHA256 hashing
 //! - [`cli`] - Command-line interface (only used by the binary)
 //! - [`testdb`] - Test database with mock devices and scenarios for testing
+//! - [`ui`] - UI support module with async controllers, device monitoring, and previews
 //!
 //! # Example Usage
 //!
@@ -46,6 +47,39 @@
 //! }
 //! ```
 //!
+//! # UI Integration
+//!
+//! The `ui` module provides everything needed to build a graphical interface:
+//!
+//! ```rust,no_run
+//! use photo_extraction_tool::ui::{
+//!     ExtractionController, DeviceMonitor, UiEvent,
+//!     ExtractionConfig, MonitorConfig,
+//! };
+//! use std::path::PathBuf;
+//!
+//! // Create controller for managing extractions
+//! let controller = ExtractionController::new();
+//!
+//! // Create device monitor for hot-plug detection
+//! let monitor = DeviceMonitor::with_config(MonitorConfig::fast());
+//!
+//! // Configure extraction
+//! let config = ExtractionConfig::new(PathBuf::from("D:/Photos"))
+//!     .preserve_structure(true)
+//!     .skip_existing(true);
+//!
+//! // Poll for events in your UI loop
+//! while let Some(event) = controller.try_recv_event() {
+//!     match event {
+//!         UiEvent::Extraction(ext) => { /* update progress */ }
+//!         UiEvent::Device(dev) => { /* handle device changes */ }
+//!         UiEvent::App(app) => { /* handle app events */ }
+//!     }
+//!     # break;
+//! }
+//! ```
+//!
 //! # Testing Without a Device
 //!
 //! The `testdb` module provides comprehensive testing capabilities:
@@ -66,10 +100,13 @@
 //!
 //! - **No iTunes Required** - Direct device access via WPD API
 //! - **Incremental Backups** - Track extracted files to avoid re-downloading
-//! - **Duplicate Detection** - Perceptual hashing to find duplicates
+//! - **Duplicate Detection** - SHA256-based exact duplicate detection
 //! - **Multi-Device Support** - Manage multiple devices with profiles
 //! - **Resume Support** - Continue interrupted extractions
 //! - **Comprehensive Testing** - Test all features without a real device
+//! - **UI Ready** - Async controllers and event system for GUI integration
+//! - **Device Monitoring** - Hot-plug detection for device connect/disconnect
+//! - **Preview Support** - Thumbnail generation infrastructure for photo previews
 //!
 //! # Platform Support
 //!
@@ -83,6 +120,7 @@ pub mod core;
 pub mod device;
 pub mod duplicate;
 pub mod testdb;
+pub mod ui;
 
 /// Library version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
