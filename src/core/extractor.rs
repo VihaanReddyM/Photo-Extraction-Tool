@@ -10,7 +10,8 @@
 use crate::core::config::{DuplicateAction, DuplicateDetectionConfig, TrackingConfig};
 use crate::core::error::{ExtractionError, Result};
 use crate::core::tracking::StateTracker;
-use crate::device::wpd::{DeviceContent, DeviceInfo, DeviceManager, DeviceObject};
+use crate::device::traits::{DeviceContentTrait, DeviceInfo, DeviceManagerTrait, DeviceObject};
+use crate::device::wpd::{DeviceContent, DeviceManager};
 use crate::duplicate::detector::PhotoHashIndex;
 use indicatif::{ProgressBar, ProgressStyle};
 use log::{debug, info, trace, warn};
@@ -157,8 +158,7 @@ pub fn extract_photos(
 
     // Create device manager and open device
     let manager = DeviceManager::new()?;
-    let device = manager.open_device(&device_info.device_id)?;
-    let content = device.get_content()?;
+    let content = manager.open_device(&device_info.device_id)?;
 
     // Create output directory
     fs::create_dir_all(&config.output_dir).map_err(|e| {

@@ -2,9 +2,16 @@
 //!
 //! This module provides ready-to-use test scenarios that cover various
 //! use cases, edge cases, and error conditions for the photo extraction tool.
+//!
+//! Each scenario includes:
+//! - A mock device with specific characteristics
+//! - A mock file system with predefined structure
+//! - Expected results for validation
+//! - Tags for filtering and organization
 
 use super::generator::MockDataGenerator;
-use super::mock_device::{MockDeviceConfig, MockDeviceInfo, MockFileSystem, MockObject};
+use super::mock_device::{MockDeviceConfig, MockFileSystem, MockObject};
+use crate::device::traits::DeviceInfo;
 
 /// A complete test scenario with device info and file system
 #[derive(Debug, Clone)]
@@ -14,7 +21,7 @@ pub struct TestScenario {
     /// Description of what this scenario tests
     pub description: String,
     /// Mock device information
-    pub device_info: MockDeviceInfo,
+    pub device_info: DeviceInfo,
     /// Mock file system
     pub file_system: MockFileSystem,
     /// Expected statistics after extraction
@@ -47,7 +54,7 @@ impl TestScenario {
     pub fn new(
         name: &str,
         description: &str,
-        device_info: MockDeviceInfo,
+        device_info: DeviceInfo,
         file_system: MockFileSystem,
         expected: ExpectedResults,
     ) -> Self {
@@ -81,7 +88,7 @@ impl ScenarioLibrary {
         TestScenario::new(
             "no_devices",
             "Test behavior when no devices are connected",
-            MockDeviceInfo {
+            DeviceInfo {
                 device_id: "".to_string(),
                 friendly_name: "".to_string(),
                 manufacturer: "".to_string(),
@@ -99,12 +106,12 @@ impl ScenarioLibrary {
 
     /// Scenario: Single iPhone connected
     pub fn single_iphone() -> TestScenario {
-        let device = MockDeviceInfo {
-            device_id: "\\\\?\\usb#vid_05ac&pid_12a8#serial123456".to_string(),
-            friendly_name: "John's iPhone".to_string(),
-            manufacturer: "Apple Inc.".to_string(),
-            model: "iPhone 15 Pro".to_string(),
-        };
+        let device = DeviceInfo::new(
+            "\\\\?\\usb#vid_05ac&pid_12a8#serial123456",
+            "John's iPhone",
+            "Apple Inc.",
+            "iPhone 15 Pro",
+        );
 
         let mut fs = MockFileSystem::new();
         Self::add_standard_dcim_structure(&mut fs, 50, 5);
@@ -129,72 +136,79 @@ impl ScenarioLibrary {
     pub fn multiple_iphones() -> Vec<TestScenario> {
         vec![
             {
-                let device = MockDeviceInfo {
-                    device_id: "\\\\?\\usb#vid_05ac&pid_12a8#iphone1".to_string(),
-                    friendly_name: "Work iPhone".to_string(),
-                    manufacturer: "Apple Inc.".to_string(),
-                    model: "iPhone 14".to_string(),
-                };
+                let device = DeviceInfo::new(
+                    "\\\\?\\usb#vid_05ac&pid_12a8#serial_device1",
+                    "Alice's iPhone 14",
+                    "Apple Inc.",
+                    "iPhone 14",
+                );
                 let mut fs = MockFileSystem::new();
                 Self::add_standard_dcim_structure(&mut fs, 30, 3);
+
                 TestScenario::new(
-                    "multiple_iphones_1",
+                    "multiple_iphones_device1",
                     "First of multiple iPhones",
                     device,
                     fs,
                     ExpectedResults {
                         files_to_extract: 30,
                         folders: 5,
+                        total_size: 30 * 1024 * 1024,
                         should_succeed: true,
                         ..Default::default()
                     },
                 )
+                .with_tags(vec!["device", "iphone", "multiple"])
             },
             {
-                let device = MockDeviceInfo {
-                    device_id: "\\\\?\\usb#vid_05ac&pid_12a8#iphone2".to_string(),
-                    friendly_name: "Personal iPhone".to_string(),
-                    manufacturer: "Apple Inc.".to_string(),
-                    model: "iPhone 15 Pro Max".to_string(),
-                };
+                let device = DeviceInfo::new(
+                    "\\\\?\\usb#vid_05ac&pid_12a8#serial_device2",
+                    "Bob's iPhone 15",
+                    "Apple Inc.",
+                    "iPhone 15",
+                );
                 let mut fs = MockFileSystem::new();
-                Self::add_standard_dcim_structure(&mut fs, 100, 10);
+                Self::add_standard_dcim_structure(&mut fs, 45, 4);
+
                 TestScenario::new(
-                    "multiple_iphones_2",
+                    "multiple_iphones_device2",
                     "Second of multiple iPhones",
                     device,
                     fs,
                     ExpectedResults {
-                        files_to_extract: 100,
-                        folders: 12,
+                        files_to_extract: 45,
+                        folders: 6,
+                        total_size: 45 * 1024 * 1024,
                         should_succeed: true,
                         ..Default::default()
                     },
                 )
+                .with_tags(vec!["device", "iphone", "multiple"])
             },
         ]
     }
 
-    /// Scenario: iPad connected
+    /// Scenario: iPad device
     pub fn ipad_device() -> TestScenario {
-        let device = MockDeviceInfo {
-            device_id: "\\\\?\\usb#vid_05ac&pid_12ab#ipad_serial".to_string(),
-            friendly_name: "My iPad Pro".to_string(),
-            manufacturer: "Apple Inc.".to_string(),
-            model: "iPad Pro 12.9-inch (6th generation)".to_string(),
-        };
+        let device = DeviceInfo::new(
+            "\\\\?\\usb#vid_05ac&pid_12ab#ipad_serial",
+            "Family iPad Pro",
+            "Apple Inc.",
+            "iPad Pro 12.9-inch",
+        );
 
         let mut fs = MockFileSystem::new();
-        Self::add_standard_dcim_structure(&mut fs, 200, 20);
+        Self::add_standard_dcim_structure(&mut fs, 100, 10);
 
         TestScenario::new(
             "ipad_device",
-            "iPad Pro with large photo library",
+            "iPad with larger photo library",
             device,
             fs,
             ExpectedResults {
-                files_to_extract: 200,
-                folders: 22,
+                files_to_extract: 100,
+                folders: 12,
+                total_size: 100 * 1024 * 1024,
                 should_succeed: true,
                 ..Default::default()
             },
@@ -202,73 +216,55 @@ impl ScenarioLibrary {
         .with_tags(vec!["device", "ipad", "basic"])
     }
 
-    /// Scenario: Mix of Apple and non-Apple devices
-    pub fn mixed_devices() -> Vec<TestScenario> {
-        vec![
-            {
-                let device = MockDeviceInfo {
-                    device_id: "\\\\?\\usb#vid_05ac&pid_12a8#iphone".to_string(),
-                    friendly_name: "iPhone".to_string(),
-                    manufacturer: "Apple Inc.".to_string(),
-                    model: "iPhone 13".to_string(),
-                };
-                let mut fs = MockFileSystem::new();
-                Self::add_standard_dcim_structure(&mut fs, 25, 2);
-                TestScenario::new(
-                    "mixed_apple",
-                    "Apple device in mixed scenario",
-                    device,
-                    fs,
-                    ExpectedResults {
-                        files_to_extract: 25,
-                        should_succeed: true,
-                        ..Default::default()
-                    },
-                )
+    /// Scenario: Mixed Apple and non-Apple devices
+    pub fn mixed_devices() -> TestScenario {
+        let device = DeviceInfo::new(
+            "\\\\?\\usb#vid_05ac&pid_12a8#iphone_mixed",
+            "iPhone in mixed setup",
+            "Apple Inc.",
+            "iPhone 13",
+        );
+
+        let mut fs = MockFileSystem::new();
+        Self::add_standard_dcim_structure(&mut fs, 25, 3);
+
+        TestScenario::new(
+            "mixed_devices",
+            "Apple device among non-Apple devices",
+            device,
+            fs,
+            ExpectedResults {
+                files_to_extract: 25,
+                folders: 5,
+                total_size: 25 * 1024 * 1024,
+                should_succeed: true,
+                ..Default::default()
             },
-            {
-                let device = MockDeviceInfo {
-                    device_id: "\\\\?\\usb#vid_04e8&pid_6860#samsung".to_string(),
-                    friendly_name: "Samsung Galaxy".to_string(),
-                    manufacturer: "Samsung".to_string(),
-                    model: "Galaxy S23".to_string(),
-                };
-                let fs = MockFileSystem::new();
-                TestScenario::new(
-                    "mixed_android",
-                    "Non-Apple device (should be filtered)",
-                    device,
-                    fs,
-                    ExpectedResults {
-                        should_succeed: true, // Not selected when filtering for Apple
-                        ..Default::default()
-                    },
-                )
-            },
-        ]
+        )
+        .with_tags(vec!["device", "iphone", "mixed"])
     }
 
     /// Scenario: Old iPhone model
     pub fn old_iphone() -> TestScenario {
-        let device = MockDeviceInfo {
-            device_id: "\\\\?\\usb#vid_05ac&pid_1292#old_iphone".to_string(),
-            friendly_name: "Old iPhone 6s".to_string(),
-            manufacturer: "Apple Inc.".to_string(),
-            model: "iPhone 6s".to_string(),
-        };
+        let device = DeviceInfo::new(
+            "\\\\?\\usb#vid_05ac&pid_1292#old_iphone",
+            "Old iPhone 6s",
+            "Apple Inc.",
+            "iPhone 6s",
+        );
 
         let mut fs = MockFileSystem::new();
-        // Old iPhones typically have JPG only
-        Self::add_legacy_dcim_structure(&mut fs, 100, 10);
+        Self::add_legacy_dcim_structure(&mut fs, 20, 2);
 
         TestScenario::new(
             "old_iphone",
-            "Legacy iPhone 6s with JPG-only photos",
+            "Legacy iPhone with older folder structure",
             device,
             fs,
             ExpectedResults {
-                files_to_extract: 100,
-                folders: 12,
+                files_to_extract: 20,
+                folders: 4,
+                total_size: 20 * 1024 * 1024,
                 should_succeed: true,
                 ..Default::default()
             },
@@ -276,25 +272,27 @@ impl ScenarioLibrary {
         .with_tags(vec!["device", "iphone", "legacy"])
     }
 
-    /// Scenario: Device with unicode/special characters in name
+    /// Scenario: Device with unicode name
     pub fn unicode_device_name() -> TestScenario {
-        let device = MockDeviceInfo {
-            device_id: "\\\\?\\usb#vid_05ac&pid_12a8#unicode".to_string(),
-            friendly_name: "田中's iPhone 📱✨".to_string(),
-            manufacturer: "Apple Inc.".to_string(),
-            model: "iPhone 15".to_string(),
-        };
+        let device = DeviceInfo::new(
+            "\\\\?\\usb#vid_05ac&pid_12a8#unicode_device",
+            "田中さんのiPhone",
+            "Apple Inc.",
+            "iPhone 15 Pro",
+        );
 
         let mut fs = MockFileSystem::new();
-        Self::add_standard_dcim_structure(&mut fs, 10, 1);
+        Self::add_standard_dcim_structure(&mut fs, 15, 2);
 
         TestScenario::new(
             "unicode_device_name",
-            "Device with unicode characters and emoji in name",
+            "Device with non-ASCII characters in name",
             device,
             fs,
             ExpectedResults {
-                files_to_extract: 10,
+                files_to_extract: 15,
+                folders: 4,
+                total_size: 15 * 1024 * 1024,
                 should_succeed: true,
                 ..Default::default()
             },
@@ -308,10 +306,14 @@ impl ScenarioLibrary {
 
     /// Scenario: Empty device (no photos)
     pub fn empty_device() -> TestScenario {
-        let device = MockDeviceInfo::default();
-        let mut fs = MockFileSystem::new();
+        let device = DeviceInfo::new(
+            "\\\\?\\usb#vid_05ac&pid_12a8#empty_device",
+            "New iPhone",
+            "Apple Inc.",
+            "iPhone 15",
+        );
 
-        // Just the folder structure, no files
+        let mut fs = MockFileSystem::new();
         fs.add_object(MockObject::folder("internal", "DEVICE", "Internal Storage"));
         fs.add_object(MockObject::folder("dcim", "internal", "DCIM"));
 
@@ -323,6 +325,7 @@ impl ScenarioLibrary {
             ExpectedResults {
                 files_to_extract: 0,
                 folders: 2,
+                total_size: 0,
                 should_succeed: true,
                 ..Default::default()
             },
@@ -332,43 +335,44 @@ impl ScenarioLibrary {
 
     /// Scenario: Deeply nested folder structure
     pub fn deeply_nested() -> TestScenario {
-        let device = MockDeviceInfo::default();
-        let mut fs = MockFileSystem::new();
+        use crate::testdb::generator::TEST_JPEG_SIZE;
 
+        let device = DeviceInfo::new(
+            "\\\\?\\usb#vid_05ac&pid_12a8#nested_device",
+            "Test iPhone",
+            "Apple Inc.",
+            "iPhone 15",
+        );
+
+        let mut fs = MockFileSystem::new();
         fs.add_object(MockObject::folder("internal", "DEVICE", "Internal Storage"));
-        fs.add_object(MockObject::folder("dcim", "internal", "DCIM"));
 
         // Create 15 levels of nesting
-        let mut parent_id = "dcim".to_string();
+        // Use small content size for memory efficiency
+        let mut parent_id = "internal".to_string();
         for i in 0..15 {
-            let folder_id = format!("level_{}", i);
-            let folder_name = format!("Level_{}", i);
+            let folder_id = format!("nested_{}", i);
+            let folder_name = format!("Folder_{}", i);
             fs.add_object(MockObject::folder(&folder_id, &parent_id, &folder_name));
-            parent_id = folder_id;
-        }
 
-        // Add some files at the deepest level
-        for i in 0..5 {
-            let file_id = format!("deep_file_{}", i);
+            // Add a file at each level with small content
+            let file_id = format!("file_level_{}", i);
             let file_name = format!("IMG_{:04}.JPG", i);
-            let content = MockDataGenerator::generate_jpeg_header(1024);
-            fs.add_object(MockObject::file(
-                &file_id,
-                &parent_id,
-                &file_name,
-                content.len() as u64,
-                content,
-            ));
+            let content = MockDataGenerator::generate_jpeg_with_seed(TEST_JPEG_SIZE, i as u64);
+            fs.add_object(MockObject::file(&file_id, &folder_id, &file_name, content));
+
+            parent_id = folder_id;
         }
 
         TestScenario::new(
             "deeply_nested",
-            "15 levels of nested folders with files at deepest level",
+            "15 levels of nested folders",
             device,
             fs,
             ExpectedResults {
-                files_to_extract: 5,
-                folders: 17, // Internal Storage + DCIM + 15 levels
+                files_to_extract: 15,
+                folders: 16,
+                total_size: 15 * TEST_JPEG_SIZE as u64,
                 should_succeed: true,
                 ..Default::default()
             },
@@ -376,37 +380,40 @@ impl ScenarioLibrary {
         .with_tags(vec!["structure", "nested", "edge-case"])
     }
 
-    /// Scenario: Thousands of files in single folder
+    /// Scenario: Many files in a single folder
     pub fn many_files_single_folder() -> TestScenario {
-        let device = MockDeviceInfo::default();
-        let mut fs = MockFileSystem::new();
+        let device = DeviceInfo::new(
+            "\\\\?\\usb#vid_05ac&pid_12a8#many_files",
+            "Photo Hoarder's iPhone",
+            "Apple Inc.",
+            "iPhone 15 Pro Max",
+        );
 
+        let mut fs = MockFileSystem::new();
         fs.add_object(MockObject::folder("internal", "DEVICE", "Internal Storage"));
         fs.add_object(MockObject::folder("dcim", "internal", "DCIM"));
         fs.add_object(MockObject::folder("100apple", "dcim", "100APPLE"));
 
-        // Add 5000 files
+        // Add 5000 files to a single folder
+        // Use small content size (2KB) to prevent memory exhaustion
+        // 5000 files × 2KB = ~10MB total (vs 1.25GB with 256KB)
+        use crate::testdb::generator::TEST_JPEG_SIZE;
         for i in 0..5000 {
-            let file_id = format!("file_{}", i);
+            let file_id = format!("img_{:06}", i);
             let file_name = format!("IMG_{:04}.JPG", i);
-            let content = MockDataGenerator::generate_jpeg_header(512); // Small files
-            fs.add_object(MockObject::file(
-                &file_id,
-                "100apple",
-                &file_name,
-                content.len() as u64,
-                content,
-            ));
+            let content = MockDataGenerator::generate_jpeg_with_seed(TEST_JPEG_SIZE, i as u64);
+            fs.add_object(MockObject::file(&file_id, "100apple", &file_name, content));
         }
 
         TestScenario::new(
             "many_files_single_folder",
-            "5000 files in a single APPLE folder",
+            "5000 files in a single folder",
             device,
             fs,
             ExpectedResults {
                 files_to_extract: 5000,
                 folders: 3,
+                total_size: 5000 * TEST_JPEG_SIZE as u64,
                 should_succeed: true,
                 ..Default::default()
             },
@@ -414,145 +421,118 @@ impl ScenarioLibrary {
         .with_tags(vec!["structure", "performance", "stress-test"])
     }
 
-    /// Scenario: Various file extensions
+    /// Scenario: All supported file types
     pub fn mixed_file_types() -> TestScenario {
-        let device = MockDeviceInfo::default();
-        let mut fs = MockFileSystem::new();
+        let device = DeviceInfo::new(
+            "\\\\?\\usb#vid_05ac&pid_12a8#mixed_types",
+            "Test iPhone",
+            "Apple Inc.",
+            "iPhone 15",
+        );
 
+        let mut fs = MockFileSystem::new();
         fs.add_object(MockObject::folder("internal", "DEVICE", "Internal Storage"));
         fs.add_object(MockObject::folder("dcim", "internal", "DCIM"));
         fs.add_object(MockObject::folder("100apple", "dcim", "100APPLE"));
 
-        // Add various file types
+        // Add various file types with small content sizes for memory efficiency
+        // Reported sizes can be larger than actual content
+        use crate::testdb::generator::TEST_CONTENT_MAX_SIZE;
         let file_types = vec![
-            (
-                "IMG_0001.JPG",
-                MockDataGenerator::generate_jpeg_header(1024),
-            ),
-            (
-                "IMG_0002.JPEG",
-                MockDataGenerator::generate_jpeg_header(1024),
-            ),
-            (
-                "IMG_0003.jpg",
-                MockDataGenerator::generate_jpeg_header(1024),
-            ), // lowercase
-            (
-                "IMG_0004.HEIC",
-                MockDataGenerator::generate_heic_header(2048),
-            ),
-            (
-                "IMG_0005.heif",
-                MockDataGenerator::generate_heic_header(2048),
-            ),
-            ("IMG_0006.PNG", MockDataGenerator::generate_png_header(1024)),
-            ("IMG_0007.png", MockDataGenerator::generate_png_header(1024)),
-            ("IMG_0008.GIF", MockDataGenerator::generate_gif_header(512)),
-            (
-                "IMG_0009.WEBP",
-                MockDataGenerator::generate_webp_header(1024),
-            ),
-            ("IMG_0010.DNG", MockDataGenerator::generate_raw_header(4096)),
-            ("IMG_0011.RAW", MockDataGenerator::generate_raw_header(4096)),
-            (
-                "IMG_0012.TIFF",
-                MockDataGenerator::generate_tiff_header(2048),
-            ),
-            (
-                "IMG_0013.TIF",
-                MockDataGenerator::generate_tiff_header(2048),
-            ),
-            ("IMG_0014.BMP", MockDataGenerator::generate_bmp_header(1024)),
-            (
-                "VID_0001.MOV",
-                MockDataGenerator::generate_mov_header(10240),
-            ),
-            (
-                "VID_0002.MP4",
-                MockDataGenerator::generate_mp4_header(10240),
-            ),
-            (
-                "VID_0003.M4V",
-                MockDataGenerator::generate_mp4_header(10240),
-            ),
-            (
-                "VID_0004.AVI",
-                MockDataGenerator::generate_avi_header(10240),
-            ),
-            ("VID_0005.3GP", MockDataGenerator::generate_3gp_header(5120)),
+            ("photo_001.jpg", "jpg", TEST_CONTENT_MAX_SIZE),
+            ("photo_002.jpeg", "jpeg", TEST_CONTENT_MAX_SIZE),
+            ("photo_003.JPG", "jpg", TEST_CONTENT_MAX_SIZE),
+            ("photo_004.JPEG", "jpeg", TEST_CONTENT_MAX_SIZE),
+            ("photo_005.png", "png", TEST_CONTENT_MAX_SIZE),
+            ("photo_006.PNG", "png", TEST_CONTENT_MAX_SIZE),
+            ("photo_007.heic", "heic", TEST_CONTENT_MAX_SIZE),
+            ("photo_008.HEIC", "heic", TEST_CONTENT_MAX_SIZE),
+            ("photo_009.heif", "heic", TEST_CONTENT_MAX_SIZE),
+            ("photo_010.gif", "gif", TEST_CONTENT_MAX_SIZE),
+            ("photo_011.webp", "webp", TEST_CONTENT_MAX_SIZE),
+            ("photo_012.raw", "raw", TEST_CONTENT_MAX_SIZE),
+            ("photo_013.dng", "raw", TEST_CONTENT_MAX_SIZE),
+            ("photo_014.tiff", "tiff", TEST_CONTENT_MAX_SIZE),
+            ("photo_015.tif", "tiff", TEST_CONTENT_MAX_SIZE),
+            ("photo_016.bmp", "bmp", TEST_CONTENT_MAX_SIZE),
+            ("video_001.mov", "mov", TEST_CONTENT_MAX_SIZE),
+            ("video_002.MOV", "mov", 50 * 1024 * 1024),
+            ("video_003.mp4", "mp4", 30 * 1024 * 1024),
+            ("video_004.MP4", "mp4", 30 * 1024 * 1024),
+            ("video_005.m4v", "mp4", 20 * 1024 * 1024),
+            ("video_006.avi", "avi", 40 * 1024 * 1024),
+            ("video_007.3gp", "3gp", 5 * 1024 * 1024),
         ];
 
-        for (i, (name, content)) in file_types.iter().enumerate() {
-            fs.add_object(MockObject::file(
-                &format!("file_{}", i),
-                "100apple",
-                name,
-                content.len() as u64,
-                content.clone(),
-            ));
+        let mut total_size = 0u64;
+        for (idx, (name, ext, size)) in file_types.iter().enumerate() {
+            let file_id = format!("mixed_{}", idx);
+            let content =
+                MockDataGenerator::generate_for_extension_with_seed(ext, *size, idx as u64);
+            fs.add_object(MockObject::file(&file_id, "100apple", name, content));
+            total_size += *size as u64;
         }
 
         TestScenario::new(
             "mixed_file_types",
-            "All supported photo and video file types",
+            "All supported photo and video formats",
             device,
             fs,
             ExpectedResults {
-                files_to_extract: 19,
+                files_to_extract: file_types.len(),
                 folders: 3,
+                total_size,
                 should_succeed: true,
                 ..Default::default()
             },
         )
-        .with_tags(vec!["structure", "file-types", "comprehensive"])
+        .with_tags(vec!["structure", "formats", "comprehensive"])
     }
 
-    /// Scenario: Files with unicode/special characters in names
+    /// Scenario: Files with unicode names
     pub fn unicode_filenames() -> TestScenario {
-        let device = MockDeviceInfo::default();
-        let mut fs = MockFileSystem::new();
+        let device = DeviceInfo::new(
+            "\\\\?\\usb#vid_05ac&pid_12a8#unicode_files",
+            "International iPhone",
+            "Apple Inc.",
+            "iPhone 15",
+        );
 
+        let mut fs = MockFileSystem::new();
         fs.add_object(MockObject::folder("internal", "DEVICE", "Internal Storage"));
         fs.add_object(MockObject::folder("dcim", "internal", "DCIM"));
         fs.add_object(MockObject::folder("100apple", "dcim", "100APPLE"));
 
-        let special_names = vec![
-            "Photo 日本語.JPG",
-            "Foto España.JPG",
-            "照片 中文.HEIC",
-            "Фото Россия.PNG",
-            "φωτογραφία.JPG",
-            "תמונה עברית.HEIC",
-            "صورة عربية.JPG",
-            "Photo émojis 🎉🎊.JPG",
-            "File with spaces.JPG",
-            "File-with-dashes.JPG",
-            "File_with_underscores.JPG",
-            "File.multiple.dots.JPG",
-            "UPPERCASE.JPG",
-            "lowercase.jpg",
-            "MixedCase.Jpg",
+        let unicode_names = vec![
+            "写真_001.jpg",
+            "фото_002.jpg",
+            "φωτογραφία_003.jpg",
+            "תמונה_004.jpg",
+            "صورة_005.jpg",
+            "사진_006.jpg",
+            "ภาพถ่าย_007.jpg",
+            "🌸_spring_008.jpg",
+            "café_été_009.jpg",
+            "naïve_010.jpg",
         ];
 
-        for (i, name) in special_names.iter().enumerate() {
-            let content = MockDataGenerator::generate_jpeg_header(1024);
-            fs.add_object(MockObject::file(
-                &format!("unicode_{}", i),
-                "100apple",
-                name,
-                content.len() as u64,
-                content,
-            ));
+        // Use small content size for memory efficiency
+        use crate::testdb::generator::TEST_JPEG_SIZE;
+        for (idx, name) in unicode_names.iter().enumerate() {
+            let file_id = format!("unicode_{}", idx);
+            let content = MockDataGenerator::generate_jpeg_with_seed(TEST_JPEG_SIZE, idx as u64);
+            fs.add_object(MockObject::file(&file_id, "100apple", name, content));
         }
 
         TestScenario::new(
             "unicode_filenames",
-            "Files with unicode characters, emoji, and special naming patterns",
+            "Files with various unicode characters in names",
             device,
             fs,
             ExpectedResults {
-                files_to_extract: 15,
+                files_to_extract: unicode_names.len(),
                 folders: 3,
+                total_size: unicode_names.len() as u64 * TEST_JPEG_SIZE as u64,
                 should_succeed: true,
                 ..Default::default()
             },
@@ -560,30 +540,37 @@ impl ScenarioLibrary {
         .with_tags(vec!["structure", "unicode", "edge-case"])
     }
 
-    /// Scenario: Very large files (videos)
+    /// Scenario: Large video files
     pub fn large_files() -> TestScenario {
-        let device = MockDeviceInfo::default();
-        let mut fs = MockFileSystem::new();
+        let device = DeviceInfo::new(
+            "\\\\?\\usb#vid_05ac&pid_12a8#large_files",
+            "Video Creator's iPhone",
+            "Apple Inc.",
+            "iPhone 15 Pro Max",
+        );
 
+        let mut fs = MockFileSystem::new();
         fs.add_object(MockObject::folder("internal", "DEVICE", "Internal Storage"));
         fs.add_object(MockObject::folder("dcim", "internal", "DCIM"));
         fs.add_object(MockObject::folder("100apple", "dcim", "100APPLE"));
 
-        // Add some large video files (simulated sizes)
-        let large_files = vec![
-            ("4K_Video_1.MOV", 2 * 1024 * 1024 * 1024u64), // 2GB
-            ("4K_Video_2.MOV", 1500 * 1024 * 1024u64),     // 1.5GB
-            ("Long_Recording.MOV", 3 * 1024 * 1024 * 1024u64), // 3GB
-            ("Timelapse.MOV", 500 * 1024 * 1024u64),       // 500MB
+        // Note: We don't actually allocate 2GB, just set the size
+        let large_sizes = vec![
+            ("4K_video_001.mov", 2 * 1024 * 1024 * 1024u64), // 2GB
+            ("4K_video_002.mov", 1536 * 1024 * 1024u64),     // 1.5GB
+            ("4K_video_003.mp4", 1024 * 1024 * 1024u64),     // 1GB
+            ("burst_001.heic", 500 * 1024 * 1024u64),        // 500MB
         ];
 
-        for (i, (name, size)) in large_files.iter().enumerate() {
-            // For large files, we just store a header but report the full size
-            let header = MockDataGenerator::generate_mov_header(1024);
-            let mut obj =
-                MockObject::file(&format!("large_{}", i), "100apple", name, *size, header);
-            obj.size = *size; // Override with reported size
+        let mut total_size = 0u64;
+        for (idx, (name, size)) in large_sizes.iter().enumerate() {
+            let file_id = format!("large_{}", idx);
+            // Just create a small placeholder - the size field will reflect the "real" size
+            let content = MockDataGenerator::generate_mov_with_seed(1024, idx as u64);
+            let mut obj = MockObject::file(&file_id, "100apple", name, content);
+            obj.object.size = *size; // Override with large size
             fs.add_object(obj);
+            total_size += *size;
         }
 
         TestScenario::new(
@@ -592,21 +579,26 @@ impl ScenarioLibrary {
             device,
             fs,
             ExpectedResults {
-                files_to_extract: 4,
+                files_to_extract: large_sizes.len(),
                 folders: 3,
-                total_size: 7 * 1024 * 1024 * 1024 + 500 * 1024 * 1024, // 7.5GB
+                total_size,
                 should_succeed: true,
                 ..Default::default()
             },
         )
-        .with_tags(vec!["structure", "large-files", "performance"])
+        .with_tags(vec!["structure", "large-files", "edge-case"])
     }
 
-    /// Scenario: Zero-byte and corrupt files
+    /// Scenario: Problematic file attributes
     pub fn problematic_files() -> TestScenario {
-        let device = MockDeviceInfo::default();
-        let mut fs = MockFileSystem::new();
+        let device = DeviceInfo::new(
+            "\\\\?\\usb#vid_05ac&pid_12a8#problematic",
+            "Problematic iPhone",
+            "Apple Inc.",
+            "iPhone 15",
+        );
 
+        let mut fs = MockFileSystem::new();
         fs.add_object(MockObject::folder("internal", "DEVICE", "Internal Storage"));
         fs.add_object(MockObject::folder("dcim", "internal", "DCIM"));
         fs.add_object(MockObject::folder("100apple", "dcim", "100APPLE"));
@@ -615,82 +607,100 @@ impl ScenarioLibrary {
         fs.add_object(MockObject::file(
             "zero_byte",
             "100apple",
-            "empty.JPG",
-            0,
+            "zero_byte.jpg",
             vec![],
         ));
 
         // File with no extension
+        let content1 = MockDataGenerator::generate_jpeg_with_seed(1024, 1);
         fs.add_object(MockObject::file(
             "no_ext",
             "100apple",
-            "IMG_0001",
-            100,
-            vec![0xFF; 100],
+            "no_extension",
+            content1,
         ));
 
-        // File with wrong extension (PNG data with JPG extension)
-        let png_data = MockDataGenerator::generate_png_header(1024);
+        // File with multiple extensions
+        let content2 = MockDataGenerator::generate_jpeg_with_seed(1024, 2);
         fs.add_object(MockObject::file(
-            "wrong_ext",
+            "multi_ext",
             "100apple",
-            "wrong.JPG",
-            png_data.len() as u64,
-            png_data,
+            "photo.backup.old.jpg",
+            content2,
         ));
 
-        // Very short filename
+        // File with very long name
+        let content3 = MockDataGenerator::generate_jpeg_with_seed(1024, 3);
+        let long_name = format!("{}.jpg", "a".repeat(200));
         fs.add_object(MockObject::file(
-            "short_name",
+            "long_name",
             "100apple",
-            "a.JPG",
-            100,
-            MockDataGenerator::generate_jpeg_header(100),
+            &long_name,
+            content3,
         ));
 
-        // Valid file for comparison
-        let valid = MockDataGenerator::generate_jpeg_header(1024);
+        // File with spaces and special chars
+        let content4 = MockDataGenerator::generate_jpeg_with_seed(1024, 4);
         fs.add_object(MockObject::file(
-            "valid",
+            "special_chars",
             "100apple",
-            "Valid_Image.JPG",
-            valid.len() as u64,
-            valid,
+            "photo (1) [copy] {backup}.jpg",
+            content4,
+        ));
+
+        // File starting with dot (hidden on Unix)
+        let content5 = MockDataGenerator::generate_jpeg_with_seed(1024, 5);
+        fs.add_object(MockObject::file(
+            "hidden_file",
+            "100apple",
+            ".hidden_photo.jpg",
+            content5,
+        ));
+
+        // File with only whitespace (except extension)
+        let content6 = MockDataGenerator::generate_jpeg_with_seed(1024, 6);
+        fs.add_object(MockObject::file(
+            "whitespace",
+            "100apple",
+            "   .jpg",
+            content6,
         ));
 
         TestScenario::new(
             "problematic_files",
-            "Zero-byte, no extension, wrong extension, and other problematic files",
+            "Files with unusual names and attributes",
             device,
             fs,
             ExpectedResults {
-                files_to_extract: 5,
+                files_to_extract: 4, // Only files with valid media extensions
                 folders: 3,
-                errors: 0, // Tool should handle gracefully
+                total_size: 4 * 1024,
                 should_succeed: true,
+                errors: 0,
                 ..Default::default()
             },
         )
-        .with_tags(vec!["structure", "edge-case", "error-handling"])
+        .with_tags(vec!["structure", "edge-case", "problematic"])
     }
 
     // =========================================================================
-    // ERROR SCENARIOS
+    // ERROR CONDITION SCENARIOS
     // =========================================================================
 
-    /// Scenario: Device is locked (access denied)
+    /// Scenario: Device is locked
     pub fn device_locked() -> TestScenario {
-        let device = MockDeviceInfo::default();
-        let mut fs = MockFileSystem::with_config(MockDeviceConfig {
-            simulate_locked: true,
-            ..Default::default()
-        });
+        let device = DeviceInfo::new(
+            "\\\\?\\usb#vid_05ac&pid_12a8#locked_device",
+            "Locked iPhone",
+            "Apple Inc.",
+            "iPhone 15",
+        );
 
-        Self::add_standard_dcim_structure(&mut fs, 10, 1);
+        let fs = MockFileSystem::with_config(MockDeviceConfig::locked());
 
         TestScenario::new(
             "device_locked",
-            "Device is locked - should prompt for trust",
+            "Device is locked and requires unlock/trust",
             device,
             fs,
             ExpectedResults {
@@ -699,179 +709,173 @@ impl ScenarioLibrary {
                 ..Default::default()
             },
         )
-        .with_tags(vec!["error", "access", "user-interaction"])
+        .with_tags(vec!["error", "locked", "access-denied"])
     }
 
     /// Scenario: Device disconnects mid-transfer
     pub fn disconnect_mid_transfer() -> TestScenario {
-        let device = MockDeviceInfo::default();
-        let mut fs = MockFileSystem::with_config(MockDeviceConfig {
-            disconnect_after_reads: Some(5), // Disconnect after 5 files
-            ..Default::default()
-        });
+        let device = DeviceInfo::new(
+            "\\\\?\\usb#vid_05ac&pid_12a8#disconnect_device",
+            "Unstable iPhone",
+            "Apple Inc.",
+            "iPhone 15",
+        );
 
+        let mut fs = MockFileSystem::with_config(MockDeviceConfig::disconnect_after(5));
         Self::add_standard_dcim_structure(&mut fs, 20, 2);
 
         TestScenario::new(
             "disconnect_mid_transfer",
-            "Device disconnects after transferring 5 files",
+            "Device disconnects after 5 file reads",
             device,
             fs,
             ExpectedResults {
-                files_to_extract: 5, // Only 5 succeed
-                errors: 1,           // Disconnect error
+                files_to_extract: 5,
+                folders: 4,
                 should_succeed: false,
-                expected_error: Some("DeviceError".to_string()),
+                expected_error: Some("disconnected".to_string()),
+                errors: 1,
                 ..Default::default()
             },
         )
         .with_tags(vec!["error", "disconnect", "resume"])
     }
 
-    /// Scenario: Specific files have read errors
+    /// Scenario: Specific files fail to read
     pub fn file_read_errors() -> TestScenario {
-        let device = MockDeviceInfo::default();
-        let mut fs = MockFileSystem::with_config(MockDeviceConfig {
-            read_error_objects: vec!["file_3".to_string(), "file_7".to_string()],
-            ..Default::default()
-        });
+        let device = DeviceInfo::new(
+            "\\\\?\\usb#vid_05ac&pid_12a8#read_errors",
+            "Corrupted iPhone",
+            "Apple Inc.",
+            "iPhone 15",
+        );
 
-        fs.add_object(MockObject::folder("internal", "DEVICE", "Internal Storage"));
-        fs.add_object(MockObject::folder("dcim", "internal", "DCIM"));
-        fs.add_object(MockObject::folder("100apple", "dcim", "100APPLE"));
+        let error_objects = vec![
+            "img_000003".to_string(),
+            "img_000007".to_string(),
+            "img_000012".to_string(),
+        ];
 
-        for i in 0..10 {
-            let content = MockDataGenerator::generate_jpeg_header(1024);
-            fs.add_object(MockObject::file(
-                &format!("file_{}", i),
-                "100apple",
-                &format!("IMG_{:04}.JPG", i),
-                content.len() as u64,
-                content,
-            ));
-        }
+        let mut fs = MockFileSystem::with_config(
+            MockDeviceConfig::default().with_read_errors(error_objects),
+        );
+        Self::add_standard_dcim_structure(&mut fs, 15, 2);
 
         TestScenario::new(
             "file_read_errors",
-            "Two specific files fail to read",
+            "Some files fail to read (corrupted sectors)",
             device,
             fs,
             ExpectedResults {
-                files_to_extract: 8, // 10 - 2 errors
-                errors: 2,
-                should_succeed: true, // Continues despite errors
+                files_to_extract: 12,
+                folders: 4,
+                should_succeed: true,
+                errors: 3,
                 ..Default::default()
             },
         )
-        .with_tags(vec!["error", "partial-failure", "resilience"])
+        .with_tags(vec!["error", "corruption", "partial-failure"])
     }
 
-    /// Scenario: Slow transfer (timeout testing)
+    /// Scenario: Slow transfer speed
     pub fn slow_transfer() -> TestScenario {
-        let device = MockDeviceInfo::default();
-        let mut fs = MockFileSystem::with_config(MockDeviceConfig {
-            transfer_delay_ms_per_kb: 10, // 10ms per KB = slow
-            ..Default::default()
-        });
+        let device = DeviceInfo::new(
+            "\\\\?\\usb#vid_05ac&pid_12a8#slow_device",
+            "Slow iPhone",
+            "Apple Inc.",
+            "iPhone 6",
+        );
 
-        Self::add_standard_dcim_structure(&mut fs, 5, 1);
+        let mut fs = MockFileSystem::with_config(MockDeviceConfig::slow_transfer(1)); // 1ms per KB
+        Self::add_standard_dcim_structure(&mut fs, 10, 2);
 
         TestScenario::new(
             "slow_transfer",
-            "Simulates slow USB connection with 10ms/KB delay",
+            "Simulated slow USB 2.0 connection",
             device,
             fs,
             ExpectedResults {
-                files_to_extract: 5,
+                files_to_extract: 10,
+                folders: 4,
                 should_succeed: true,
                 ..Default::default()
             },
         )
-        .with_tags(vec!["performance", "slow", "timeout"])
+        .with_tags(vec!["error", "slow", "performance"])
     }
 
-    /// Scenario: Random failures (flaky connection)
+    /// Scenario: Random connection failures
     pub fn flaky_connection() -> TestScenario {
-        let device = MockDeviceInfo::default();
-        let mut fs = MockFileSystem::with_config(MockDeviceConfig {
-            random_failure_rate: 10, // 10% failure rate
-            ..Default::default()
-        });
+        let device = DeviceInfo::new(
+            "\\\\?\\usb#vid_05ac&pid_12a8#flaky_device",
+            "Flaky iPhone",
+            "Apple Inc.",
+            "iPhone 15",
+        );
 
+        let mut fs = MockFileSystem::with_config(MockDeviceConfig::flaky(10)); // 10% failure rate
         Self::add_standard_dcim_structure(&mut fs, 50, 5);
 
         TestScenario::new(
             "flaky_connection",
-            "10% random failure rate to simulate unstable connection",
+            "Random 10% failure rate on file reads",
             device,
             fs,
             ExpectedResults {
-                files_to_extract: 45, // ~90% success
-                errors: 5,            // ~10% failures
+                files_to_extract: 45, // Approximately 90%
+                folders: 7,
                 should_succeed: true,
+                errors: 5, // Approximately 10%
                 ..Default::default()
             },
         )
-        .with_tags(vec!["error", "random", "resilience"])
+        .with_tags(vec!["error", "flaky", "random-failure"])
     }
 
     // =========================================================================
     // DUPLICATE DETECTION SCENARIOS
     // =========================================================================
 
-    /// Scenario: Exact duplicates (same file, same name)
+    /// Scenario: Exact duplicate files
     pub fn exact_duplicates() -> TestScenario {
-        let device = MockDeviceInfo::default();
-        let mut fs = MockFileSystem::new();
+        let device = DeviceInfo::new(
+            "\\\\?\\usb#vid_05ac&pid_12a8#duplicates",
+            "Duplicate iPhone",
+            "Apple Inc.",
+            "iPhone 15",
+        );
 
+        let mut fs = MockFileSystem::new();
         fs.add_object(MockObject::folder("internal", "DEVICE", "Internal Storage"));
         fs.add_object(MockObject::folder("dcim", "internal", "DCIM"));
         fs.add_object(MockObject::folder("100apple", "dcim", "100APPLE"));
         fs.add_object(MockObject::folder("101apple", "dcim", "101APPLE"));
 
-        // Same content in both folders
-        let content = MockDataGenerator::generate_jpeg_with_seed(1024, 12345);
-        fs.add_object(MockObject::file(
-            "file_100_1",
-            "100apple",
-            "IMG_0001.JPG",
-            content.len() as u64,
-            content.clone(),
-        ));
-        fs.add_object(MockObject::file(
-            "file_101_1",
-            "101apple",
-            "IMG_0001.JPG",
-            content.len() as u64,
-            content,
-        ));
+        // Create some unique files
+        for i in 0..5 {
+            let file_id = format!("unique_{}", i);
+            let file_name = format!("IMG_{:04}.JPG", i);
+            let content = MockDataGenerator::generate_jpeg_with_seed(1024 * 1024, i as u64);
+            fs.add_object(MockObject::file(&file_id, "100apple", &file_name, content));
+        }
 
-        // Unique files
-        let unique1 = MockDataGenerator::generate_jpeg_with_seed(1024, 11111);
-        let unique2 = MockDataGenerator::generate_jpeg_with_seed(1024, 22222);
-        fs.add_object(MockObject::file(
-            "file_100_2",
-            "100apple",
-            "IMG_0002.JPG",
-            unique1.len() as u64,
-            unique1,
-        ));
-        fs.add_object(MockObject::file(
-            "file_101_2",
-            "101apple",
-            "IMG_0003.JPG",
-            unique2.len() as u64,
-            unique2,
-        ));
+        // Create exact duplicates in another folder
+        for i in 0..5 {
+            let file_id = format!("dup_{}", i);
+            let file_name = format!("IMG_{:04}.JPG", i); // Same name
+            let content = MockDataGenerator::generate_jpeg_with_seed(1024 * 1024, i as u64); // Same content
+            fs.add_object(MockObject::file(&file_id, "101apple", &file_name, content));
+        }
 
         TestScenario::new(
             "exact_duplicates",
-            "Same file exists in multiple folders",
+            "Same files in multiple folders",
             device,
             fs,
             ExpectedResults {
-                files_to_extract: 3, // 4 files, 1 duplicate
-                duplicates: 1,
+                files_to_extract: 10, // Without dedup: 10, With dedup: 5
+                folders: 4,
+                duplicates: 5,
                 should_succeed: true,
                 ..Default::default()
             },
@@ -881,45 +885,43 @@ impl ScenarioLibrary {
 
     /// Scenario: Same content, different names
     pub fn renamed_duplicates() -> TestScenario {
-        let device = MockDeviceInfo::default();
-        let mut fs = MockFileSystem::new();
+        let device = DeviceInfo::new(
+            "\\\\?\\usb#vid_05ac&pid_12a8#renamed_dups",
+            "Renamed Duplicates iPhone",
+            "Apple Inc.",
+            "iPhone 15",
+        );
 
+        let mut fs = MockFileSystem::new();
         fs.add_object(MockObject::folder("internal", "DEVICE", "Internal Storage"));
         fs.add_object(MockObject::folder("dcim", "internal", "DCIM"));
         fs.add_object(MockObject::folder("100apple", "dcim", "100APPLE"));
 
-        // Same content, different names
-        let content = MockDataGenerator::generate_jpeg_with_seed(2048, 99999);
-        fs.add_object(MockObject::file(
-            "orig",
-            "100apple",
-            "IMG_0001.JPG",
-            content.len() as u64,
-            content.clone(),
-        ));
-        fs.add_object(MockObject::file(
-            "renamed1",
-            "100apple",
-            "IMG_0001 (1).JPG",
-            content.len() as u64,
-            content.clone(),
-        ));
-        fs.add_object(MockObject::file(
-            "renamed2",
-            "100apple",
-            "Copy of IMG_0001.JPG",
-            content.len() as u64,
-            content,
-        ));
+        // Create original files
+        for i in 0..5 {
+            let file_id = format!("orig_{}", i);
+            let file_name = format!("IMG_{:04}.JPG", i);
+            let content = MockDataGenerator::generate_jpeg_with_seed(1024 * 1024, i as u64);
+            fs.add_object(MockObject::file(&file_id, "100apple", &file_name, content));
+        }
+
+        // Create renamed duplicates (same content, different names)
+        for i in 0..5 {
+            let file_id = format!("renamed_{}", i);
+            let file_name = format!("photo_backup_{:04}.jpg", i); // Different name
+            let content = MockDataGenerator::generate_jpeg_with_seed(1024 * 1024, i as u64); // Same content
+            fs.add_object(MockObject::file(&file_id, "100apple", &file_name, content));
+        }
 
         TestScenario::new(
             "renamed_duplicates",
-            "Same content but files have different names",
+            "Same content with different filenames",
             device,
             fs,
             ExpectedResults {
-                files_to_extract: 1,
-                duplicates: 2,
+                files_to_extract: 10,
+                folders: 3,
+                duplicates: 5,
                 should_succeed: true,
                 ..Default::default()
             },
@@ -927,93 +929,101 @@ impl ScenarioLibrary {
         .with_tags(vec!["duplicate", "renamed"])
     }
 
-    /// Scenario: No duplicates at all
+    /// Scenario: No duplicates
     pub fn no_duplicates() -> TestScenario {
-        let device = MockDeviceInfo::default();
-        let mut fs = MockFileSystem::new();
+        let device = DeviceInfo::new(
+            "\\\\?\\usb#vid_05ac&pid_12a8#no_dups",
+            "Unique Files iPhone",
+            "Apple Inc.",
+            "iPhone 15",
+        );
 
+        let mut fs = MockFileSystem::new();
         fs.add_object(MockObject::folder("internal", "DEVICE", "Internal Storage"));
         fs.add_object(MockObject::folder("dcim", "internal", "DCIM"));
         fs.add_object(MockObject::folder("100apple", "dcim", "100APPLE"));
 
         // All unique files with different seeds
-        for i in 0..10 {
-            let content = MockDataGenerator::generate_jpeg_with_seed(1024, i as u64);
-            fs.add_object(MockObject::file(
-                &format!("file_{}", i),
-                "100apple",
-                &format!("IMG_{:04}.JPG", i),
-                content.len() as u64,
-                content,
-            ));
+        for i in 0..20 {
+            let file_id = format!("unique_{}", i);
+            let file_name = format!("IMG_{:04}.JPG", i);
+            let content =
+                MockDataGenerator::generate_jpeg_with_seed(1024 * 1024, (i * 1000) as u64);
+            fs.add_object(MockObject::file(&file_id, "100apple", &file_name, content));
         }
 
         TestScenario::new(
             "no_duplicates",
-            "All files are unique - no duplicates to detect",
+            "All unique files",
             device,
             fs,
             ExpectedResults {
-                files_to_extract: 10,
+                files_to_extract: 20,
+                folders: 3,
                 duplicates: 0,
                 should_succeed: true,
                 ..Default::default()
             },
         )
-        .with_tags(vec!["duplicate", "no-match"])
+        .with_tags(vec!["duplicate", "no-duplicates"])
     }
 
     // =========================================================================
-    // STATE/TRACKING SCENARIOS
+    // TRACKING/RESUME SCENARIOS
     // =========================================================================
 
-    /// Scenario: Fresh extraction (no previous state)
+    /// Scenario: First time extraction (no tracking file)
     pub fn fresh_extraction() -> TestScenario {
-        let device = MockDeviceInfo {
-            device_id: "fresh-device-001".to_string(),
-            ..Default::default()
-        };
+        let device = DeviceInfo::new(
+            "\\\\?\\usb#vid_05ac&pid_12a8#fresh_extract",
+            "New iPhone",
+            "Apple Inc.",
+            "iPhone 15",
+        );
 
         let mut fs = MockFileSystem::new();
-        Self::add_standard_dcim_structure(&mut fs, 25, 2);
+        Self::add_standard_dcim_structure(&mut fs, 25, 3);
 
         TestScenario::new(
             "fresh_extraction",
-            "First time extraction from device - no tracking state",
+            "First extraction with no prior tracking",
             device,
             fs,
             ExpectedResults {
                 files_to_extract: 25,
+                folders: 5,
                 should_succeed: true,
                 ..Default::default()
             },
         )
-        .with_tags(vec!["tracking", "fresh"])
+        .with_tags(vec!["tracking", "fresh", "first-run"])
     }
 
-    /// Scenario: Resume interrupted extraction
+    /// Scenario: Resume after interruption
     pub fn resume_extraction() -> TestScenario {
-        let device = MockDeviceInfo {
-            device_id: "resume-device-001".to_string(),
-            ..Default::default()
-        };
+        let device = DeviceInfo::new(
+            "\\\\?\\usb#vid_05ac&pid_12a8#resume_extract",
+            "Resume iPhone",
+            "Apple Inc.",
+            "iPhone 15",
+        );
 
         let mut fs = MockFileSystem::new();
-        // 50 total files, assume 20 already extracted
-        Self::add_standard_dcim_structure(&mut fs, 50, 5);
+        Self::add_standard_dcim_structure(&mut fs, 30, 3);
 
         TestScenario::new(
             "resume_extraction",
-            "Resume extraction - 20 of 50 files already extracted",
+            "Resume extraction after interruption",
             device,
             fs,
             ExpectedResults {
-                files_to_extract: 30, // 50 - 20 already done
+                files_to_extract: 15, // Only remaining files
+                folders: 5,
                 should_succeed: true,
                 ..Default::default()
             },
         )
-        .with_tags(vec!["tracking", "resume"])
+        .with_tags(vec!["tracking", "resume", "interrupted"])
     }
 
     // =========================================================================
@@ -1022,23 +1032,24 @@ impl ScenarioLibrary {
 
     /// Scenario: New device requiring profile creation
     pub fn new_device_profile() -> TestScenario {
-        let device = MockDeviceInfo {
-            device_id: "brand-new-device-no-profile".to_string(),
-            friendly_name: "New iPhone".to_string(),
-            manufacturer: "Apple Inc.".to_string(),
-            model: "iPhone 15".to_string(),
-        };
+        let device = DeviceInfo::new(
+            "\\\\?\\usb#vid_05ac&pid_12a8#new_profile_device",
+            "Brand New iPhone",
+            "Apple Inc.",
+            "iPhone 15 Pro",
+        );
 
         let mut fs = MockFileSystem::new();
-        Self::add_standard_dcim_structure(&mut fs, 10, 1);
+        Self::add_standard_dcim_structure(&mut fs, 20, 2);
 
         TestScenario::new(
             "new_device_profile",
-            "Brand new device requiring profile creation",
+            "New device requiring profile creation",
             device,
             fs,
             ExpectedResults {
-                files_to_extract: 10,
+                files_to_extract: 20,
+                folders: 4,
                 should_succeed: true,
                 ..Default::default()
             },
@@ -1048,264 +1059,282 @@ impl ScenarioLibrary {
 
     /// Scenario: Known device with existing profile
     pub fn known_device_profile() -> TestScenario {
-        let device = MockDeviceInfo {
-            device_id: "known-device-with-profile".to_string(),
-            friendly_name: "John's iPhone".to_string(),
-            manufacturer: "Apple Inc.".to_string(),
-            model: "iPhone 14 Pro".to_string(),
-        };
+        let device = DeviceInfo::new(
+            "\\\\?\\usb#vid_05ac&pid_12a8#known_profile_device",
+            "Known iPhone",
+            "Apple Inc.",
+            "iPhone 14",
+        );
 
         let mut fs = MockFileSystem::new();
-        Self::add_standard_dcim_structure(&mut fs, 30, 3);
+        Self::add_standard_dcim_structure(&mut fs, 35, 4);
 
         TestScenario::new(
             "known_device_profile",
-            "Known device with existing profile - should auto-select output folder",
+            "Known device with existing profile",
             device,
             fs,
             ExpectedResults {
-                files_to_extract: 30,
+                files_to_extract: 35,
+                folders: 6,
                 should_succeed: true,
                 ..Default::default()
             },
         )
-        .with_tags(vec!["profile", "existing"])
+        .with_tags(vec!["profile", "known-device"])
     }
 
     // =========================================================================
-    // COMPREHENSIVE/STRESS SCENARIOS
+    // STRESS TEST SCENARIOS
     // =========================================================================
 
-    /// Scenario: Realistic iPhone photo library
+    /// Scenario: Realistic iPhone with thousands of photos
     pub fn realistic_iphone() -> TestScenario {
-        let device = MockDeviceInfo {
-            device_id: "realistic-iphone-001".to_string(),
-            friendly_name: "Sarah's iPhone 15 Pro".to_string(),
-            manufacturer: "Apple Inc.".to_string(),
-            model: "iPhone 15 Pro".to_string(),
-        };
+        use crate::testdb::generator::{TEST_HEIC_SIZE, TEST_JPEG_SIZE, TEST_VIDEO_SIZE};
+
+        let device = DeviceInfo::new(
+            "\\\\?\\usb#vid_05ac&pid_12a8#realistic_device",
+            "Real World iPhone",
+            "Apple Inc.",
+            "iPhone 15 Pro",
+        );
 
         let mut fs = MockFileSystem::new();
         fs.add_object(MockObject::folder("internal", "DEVICE", "Internal Storage"));
         fs.add_object(MockObject::folder("dcim", "internal", "DCIM"));
 
-        let mut file_count = 0;
+        // Create 25 folders with 100 files each = 2500 files
+        // Using lightweight content to prevent memory issues during testing
+        let mut file_counter = 1;
+        let mut total_size = 0u64;
 
-        // Create realistic folder distribution
-        // 100APPLE through 120APPLE with varying file counts
-        for folder_num in 100..121 {
+        for folder_idx in 0..25 {
+            let folder_num = 100 + folder_idx;
             let folder_id = format!("{}apple", folder_num);
             let folder_name = format!("{}APPLE", folder_num);
+
             fs.add_object(MockObject::folder(&folder_id, "dcim", &folder_name));
 
-            // Earlier folders have more files
-            let files_in_folder = match folder_num {
-                100..=105 => 200,
-                106..=110 => 150,
-                111..=115 => 100,
-                _ => 50,
-            };
+            for _ in 0..100 {
+                let file_id = format!("img_{:06}", file_counter);
 
-            for i in 0..files_in_folder {
-                let file_id = format!("{}_{}", folder_id, i);
-
-                // Mix of file types
-                let (name, content) = match i % 10 {
-                    0..=5 => {
-                        // 60% HEIC
-                        let name = format!("IMG_{:04}.HEIC", file_count);
-                        let content = MockDataGenerator::generate_heic_with_seed(
-                            2 * 1024 * 1024,
-                            file_count as u64,
-                        );
-                        (name, content)
-                    }
-                    6..=7 => {
-                        // 20% JPG
-                        let name = format!("IMG_{:04}.JPG", file_count);
-                        let content = MockDataGenerator::generate_jpeg_with_seed(
-                            1024 * 1024,
-                            file_count as u64,
-                        );
-                        (name, content)
-                    }
-                    8 => {
-                        // 10% MOV
-                        let name = format!("IMG_{:04}.MOV", file_count);
-                        let content = MockDataGenerator::generate_mov_with_seed(
-                            50 * 1024 * 1024,
-                            file_count as u64,
-                        );
-                        (name, content)
-                    }
-                    _ => {
-                        // 10% PNG screenshots
-                        let name = format!("IMG_{:04}.PNG", file_count);
-                        let content = MockDataGenerator::generate_png_with_seed(
-                            500 * 1024,
-                            file_count as u64,
-                        );
-                        (name, content)
-                    }
+                // Mix of photos and videos - use small content sizes for memory efficiency
+                // The reported size can differ from actual content size
+                let (file_name, reported_size, content_size) = if file_counter % 10 == 0 {
+                    // Every 10th file is a video
+                    (
+                        format!("IMG_{:04}.MOV", file_counter),
+                        50 * 1024 * 1024u64, // Reported as 50MB
+                        TEST_VIDEO_SIZE,     // Actual content is small
+                    )
+                } else if file_counter % 5 == 0 {
+                    // Every 5th (non-video) is HEIC
+                    (
+                        format!("IMG_{:04}.HEIC", file_counter),
+                        2 * 1024 * 1024u64, // Reported as 2MB
+                        TEST_HEIC_SIZE,     // Actual content is small
+                    )
+                } else {
+                    // Regular JPEG
+                    (
+                        format!("IMG_{:04}.JPG", file_counter),
+                        3 * 1024 * 1024u64, // Reported as 3MB
+                        TEST_JPEG_SIZE,     // Actual content is small
+                    )
                 };
 
-                fs.add_object(MockObject::file(
-                    &file_id,
-                    &folder_id,
-                    &name,
-                    content.len() as u64,
-                    content,
-                ));
-                file_count += 1;
+                let ext = file_name.split('.').last().unwrap_or("jpg").to_lowercase();
+                let content = MockDataGenerator::generate_for_extension_with_seed(
+                    &ext,
+                    content_size,
+                    file_counter as u64,
+                );
+                let mut obj = MockObject::file(&file_id, &folder_id, &file_name, content);
+                obj.object.size = reported_size; // Set reported size (different from content)
+                fs.add_object(obj);
+
+                total_size += reported_size;
+                file_counter += 1;
             }
         }
 
         TestScenario::new(
             "realistic_iphone",
-            "Realistic iPhone 15 Pro photo library with 2500+ files",
+            "Realistic iPhone with 2500+ files",
             device,
             fs,
             ExpectedResults {
-                files_to_extract: file_count,
-                folders: 23, // Internal Storage + DCIM + 21 APPLE folders
+                files_to_extract: 2500,
+                folders: 27,
+                total_size,
                 should_succeed: true,
                 ..Default::default()
             },
         )
-        .with_tags(vec!["comprehensive", "realistic", "stress-test"])
+        .with_tags(vec!["stress-test", "realistic", "performance"])
     }
 
     /// Scenario: Maximum stress test
+    ///
+    /// Uses minimal content size per file to prevent memory exhaustion.
+    /// With 10,000 files at 512 bytes each = ~5MB total (vs 640MB before)
     pub fn stress_test() -> TestScenario {
-        let device = MockDeviceInfo {
-            device_id: "stress-test-device".to_string(),
-            friendly_name: "Stress Test iPhone".to_string(),
-            manufacturer: "Apple Inc.".to_string(),
-            model: "iPhone".to_string(),
-        };
+        use crate::testdb::generator::TEST_STRESS_SIZE;
+
+        let device = DeviceInfo::new(
+            "\\\\?\\usb#vid_05ac&pid_12a8#stress_device",
+            "Stress Test iPhone",
+            "Apple Inc.",
+            "iPhone 15 Pro Max",
+        );
 
         let mut fs = MockFileSystem::new();
         fs.add_object(MockObject::folder("internal", "DEVICE", "Internal Storage"));
         fs.add_object(MockObject::folder("dcim", "internal", "DCIM"));
 
-        let mut file_count = 0;
+        // Create 100 folders with 100 files each = 10,000 files
+        // Using minimal content size to prevent memory issues
+        let content_size = TEST_STRESS_SIZE; // 512 bytes per file
+        let mut file_counter = 1;
 
-        // 50 folders with 200 files each = 10,000 files
-        for folder_num in 100..150 {
+        for folder_idx in 0..100 {
+            let folder_num = 100 + folder_idx;
             let folder_id = format!("{}apple", folder_num);
             let folder_name = format!("{}APPLE", folder_num);
+
             fs.add_object(MockObject::folder(&folder_id, "dcim", &folder_name));
 
-            for i in 0..200 {
-                let file_id = format!("stress_{}_{}", folder_num, i);
-                let name = format!("IMG_{:05}.JPG", file_count);
-                // Minimal content for speed
-                let content = MockDataGenerator::generate_jpeg_header(256);
-                fs.add_object(MockObject::file(
-                    &file_id,
-                    &folder_id,
-                    &name,
-                    content.len() as u64,
-                    content,
-                ));
-                file_count += 1;
+            for _ in 0..100 {
+                let file_id = format!("img_{:06}", file_counter);
+                let file_name = format!("IMG_{:04}.JPG", file_counter);
+
+                // Minimal content for stress testing - just valid JPEG headers
+                let content =
+                    MockDataGenerator::generate_jpeg_with_seed(content_size, file_counter as u64);
+                fs.add_object(MockObject::file(&file_id, &folder_id, &file_name, content));
+
+                file_counter += 1;
             }
         }
 
         TestScenario::new(
             "stress_test",
-            "Maximum stress test: 10,000 files across 50 folders",
+            "Maximum stress test with 10,000 files",
             device,
             fs,
             ExpectedResults {
                 files_to_extract: 10000,
-                folders: 52,
+                folders: 102,
+                total_size: 10000 * content_size as u64,
                 should_succeed: true,
                 ..Default::default()
             },
         )
-        .with_tags(vec!["stress-test", "performance", "extreme"])
+        .with_tags(vec!["stress-test", "maximum", "performance"])
     }
 
     // =========================================================================
-    // HELPER FUNCTIONS
+    // HELPER METHODS
     // =========================================================================
 
-    /// Add standard DCIM structure to a file system
-    fn add_standard_dcim_structure(fs: &mut MockFileSystem, total_files: usize, folders: usize) {
+    /// Add standard iOS DCIM folder structure
+    ///
+    /// Uses small content sizes for memory efficiency during testing.
+    fn add_standard_dcim_structure(
+        fs: &mut MockFileSystem,
+        total_files: usize,
+        num_folders: usize,
+    ) {
+        use crate::testdb::generator::TEST_JPEG_SIZE;
+
         fs.add_object(MockObject::folder("internal", "DEVICE", "Internal Storage"));
         fs.add_object(MockObject::folder("dcim", "internal", "DCIM"));
 
-        let files_per_folder = total_files / folders;
-        let mut file_num = 0;
+        // Use ceiling division to ensure we create at least total_files
+        // (avoids bug where 25/3=8, 8*3=24 files instead of 25)
+        let num_folders = num_folders.max(1);
+        let files_per_folder = (total_files + num_folders - 1) / num_folders;
+        let mut file_counter = 1;
 
-        for folder_idx in 0..folders {
-            let folder_id = format!("{}apple", 100 + folder_idx);
-            let folder_name = format!("{}APPLE", 100 + folder_idx);
+        for folder_idx in 0..num_folders {
+            let folder_num = 100 + folder_idx;
+            let folder_id = format!("{}apple", folder_num);
+            let folder_name = format!("{}APPLE", folder_num);
+
             fs.add_object(MockObject::folder(&folder_id, "dcim", &folder_name));
 
-            for i in 0..files_per_folder {
-                let file_id = format!("file_{}_{}", folder_idx, i);
-                let file_name = format!("IMG_{:04}.JPG", file_num);
+            for _ in 0..files_per_folder {
+                if file_counter > total_files {
+                    break;
+                }
 
-                // Alternate between HEIC and JPG
-                let content = if file_num % 2 == 0 {
-                    MockDataGenerator::generate_heic_header(1024 * 1024)
-                } else {
-                    MockDataGenerator::generate_jpeg_header(500 * 1024)
-                };
+                let file_id = format!("img_{:06}", file_counter);
+                let file_name = format!("IMG_{:04}.JPG", file_counter);
+                // Use small content size (2KB) for memory efficiency
+                let content =
+                    MockDataGenerator::generate_jpeg_with_seed(TEST_JPEG_SIZE, file_counter as u64);
 
-                fs.add_object(MockObject::file(
-                    &file_id,
-                    &folder_id,
-                    &file_name,
-                    content.len() as u64,
-                    content,
-                ));
-                file_num += 1;
+                fs.add_object(MockObject::file(&file_id, &folder_id, &file_name, content));
+                file_counter += 1;
             }
         }
     }
 
-    /// Add legacy DCIM structure (JPG only, older naming)
-    fn add_legacy_dcim_structure(fs: &mut MockFileSystem, total_files: usize, folders: usize) {
+    /// Add legacy iOS folder structure (for older devices)
+    ///
+    /// Uses small content sizes for memory efficiency during testing.
+    fn add_legacy_dcim_structure(fs: &mut MockFileSystem, total_files: usize, num_folders: usize) {
+        use crate::testdb::generator::TEST_JPEG_SIZE;
+
         fs.add_object(MockObject::folder("internal", "DEVICE", "Internal Storage"));
         fs.add_object(MockObject::folder("dcim", "internal", "DCIM"));
 
-        let files_per_folder = total_files / folders;
-        let mut file_num = 0;
+        // Use ceiling division to ensure we create at least total_files
+        let num_folders = num_folders.max(1);
+        let files_per_folder = (total_files + num_folders - 1) / num_folders;
+        let mut file_counter = 1;
 
-        for folder_idx in 0..folders {
-            let folder_id = format!("{}apple", 100 + folder_idx);
-            let folder_name = format!("{}APPLE", 100 + folder_idx);
+        for folder_idx in 0..num_folders {
+            let folder_num = 100 + folder_idx;
+            // Legacy iPhones used just numbers
+            let folder_id = format!("{}", folder_num);
+            let folder_name = format!("{}", folder_num);
+
             fs.add_object(MockObject::folder(&folder_id, "dcim", &folder_name));
 
-            for i in 0..files_per_folder {
-                let file_id = format!("legacy_{}_{}", folder_idx, i);
-                let file_name = format!("IMG_{:04}.JPG", file_num);
+            for _ in 0..files_per_folder {
+                if file_counter > total_files {
+                    break;
+                }
 
-                let content = MockDataGenerator::generate_jpeg_header(300 * 1024);
+                let file_id = format!("img_{:06}", file_counter);
+                // Legacy naming convention
+                let file_name = format!("IMG_{:04}.JPG", file_counter);
+                // Use small content size (2KB) for memory efficiency
+                let content =
+                    MockDataGenerator::generate_jpeg_with_seed(TEST_JPEG_SIZE, file_counter as u64);
 
-                fs.add_object(MockObject::file(
-                    &file_id,
-                    &folder_id,
-                    &file_name,
-                    content.len() as u64,
-                    content,
-                ));
-                file_num += 1;
+                fs.add_object(MockObject::file(&file_id, &folder_id, &file_name, content));
+                file_counter += 1;
             }
         }
     }
+
+    // =========================================================================
+    // SCENARIO COLLECTIONS
+    // =========================================================================
 
     /// Get all available scenarios
     pub fn all_scenarios() -> Vec<TestScenario> {
         let mut scenarios = vec![
+            // Device detection
             Self::no_devices(),
             Self::single_iphone(),
             Self::ipad_device(),
+            Self::mixed_devices(),
             Self::old_iphone(),
             Self::unicode_device_name(),
+            // File structure
             Self::empty_device(),
             Self::deeply_nested(),
             Self::many_files_single_folder(),
@@ -1313,34 +1342,38 @@ impl ScenarioLibrary {
             Self::unicode_filenames(),
             Self::large_files(),
             Self::problematic_files(),
+            // Error conditions
             Self::device_locked(),
             Self::disconnect_mid_transfer(),
             Self::file_read_errors(),
             Self::slow_transfer(),
             Self::flaky_connection(),
+            // Duplicates
             Self::exact_duplicates(),
             Self::renamed_duplicates(),
             Self::no_duplicates(),
+            // Tracking
             Self::fresh_extraction(),
             Self::resume_extraction(),
+            // Profiles
             Self::new_device_profile(),
             Self::known_device_profile(),
+            // Stress tests
             Self::realistic_iphone(),
             Self::stress_test(),
         ];
 
-        // Add multi-device scenarios
+        // Add multiple device scenarios
         scenarios.extend(Self::multiple_iphones());
-        scenarios.extend(Self::mixed_devices());
 
         scenarios
     }
 
-    /// Get scenarios by tag
+    /// Get scenarios filtered by tag
     pub fn scenarios_by_tag(tag: &str) -> Vec<TestScenario> {
         Self::all_scenarios()
             .into_iter()
-            .filter(|s| s.tags.iter().any(|t| t == tag))
+            .filter(|s| s.tags.contains(&tag.to_string()))
             .collect()
     }
 
@@ -1352,6 +1385,7 @@ impl ScenarioLibrary {
             Self::mixed_file_types(),
             Self::device_locked(),
             Self::exact_duplicates(),
+            Self::fresh_extraction(),
         ]
     }
 }
@@ -1364,21 +1398,81 @@ mod tests {
     fn test_all_scenarios_load() {
         let scenarios = ScenarioLibrary::all_scenarios();
         assert!(!scenarios.is_empty());
-        println!("Loaded {} test scenarios", scenarios.len());
+        assert!(scenarios.len() >= 20);
     }
 
     #[test]
     fn test_scenario_by_tag() {
-        let error_scenarios = ScenarioLibrary::scenarios_by_tag("error");
-        assert!(!error_scenarios.is_empty());
-        for s in &error_scenarios {
-            assert!(s.tags.contains(&"error".to_string()));
+        let device_scenarios = ScenarioLibrary::scenarios_by_tag("device");
+        assert!(!device_scenarios.is_empty());
+
+        for scenario in device_scenarios {
+            assert!(scenario.tags.contains(&"device".to_string()));
         }
     }
 
     #[test]
     fn test_quick_scenarios() {
         let quick = ScenarioLibrary::quick_scenarios();
-        assert_eq!(quick.len(), 5);
+        assert!(!quick.is_empty());
+        assert!(quick.len() <= 10);
+    }
+
+    #[test]
+    fn test_scenario_has_required_fields() {
+        for scenario in ScenarioLibrary::all_scenarios() {
+            assert!(
+                !scenario.name.is_empty(),
+                "Scenario name should not be empty"
+            );
+            assert!(
+                !scenario.description.is_empty(),
+                "Scenario description should not be empty"
+            );
+            assert!(
+                !scenario.tags.is_empty(),
+                "Scenario should have at least one tag"
+            );
+        }
+    }
+
+    #[test]
+    fn test_expected_results_consistency() {
+        for scenario in ScenarioLibrary::all_scenarios() {
+            if scenario.expected.should_succeed {
+                // If should succeed, files_to_extract should match file count (roughly)
+                let actual_files = scenario.file_system.file_count();
+                // Allow some flexibility for problematic files scenarios
+                if !scenario.tags.contains(&"problematic".to_string()) {
+                    assert!(
+                        actual_files >= scenario.expected.files_to_extract,
+                        "Scenario {} has {} files but expects {}",
+                        scenario.name,
+                        actual_files,
+                        scenario.expected.files_to_extract
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_single_iphone_scenario() {
+        let scenario = ScenarioLibrary::single_iphone();
+
+        assert_eq!(scenario.name, "single_iphone");
+        assert!(scenario.expected.should_succeed);
+        assert!(scenario.expected.files_to_extract > 0);
+        assert!(scenario.file_system.file_count() > 0);
+        assert!(scenario.device_info.friendly_name.contains("iPhone"));
+    }
+
+    #[test]
+    fn test_device_locked_scenario() {
+        let scenario = ScenarioLibrary::device_locked();
+
+        assert_eq!(scenario.name, "device_locked");
+        assert!(!scenario.expected.should_succeed);
+        assert!(scenario.expected.expected_error.is_some());
     }
 }

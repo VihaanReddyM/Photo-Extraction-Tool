@@ -19,7 +19,7 @@
 //! ```rust,no_run
 //! use photo_extraction_tool::core::config::Config;
 //! use photo_extraction_tool::core::extractor;
-//! use photo_extraction_tool::device::{DeviceManager, initialize_com};
+//! use photo_extraction_tool::device::{DeviceManager, DeviceManagerTrait, initialize_com};
 //! use std::sync::Arc;
 //! use std::sync::atomic::AtomicBool;
 //!

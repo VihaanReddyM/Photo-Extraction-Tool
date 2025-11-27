@@ -3,17 +3,14 @@
 //! This module provides a comprehensive testing framework for the photo extraction tool
 //! that allows testing all features without connecting a real phone to the PC.
 //!
-//! Note: Many functions in this module are intentionally kept for API completeness
-//! even if not currently used by the CLI.
-
-#![allow(dead_code)]
-#![allow(unused_imports)]
-
+//! # Architecture
 //!
-//! # Features
+//! The testing module is built around trait-based abstractions that allow the same
+//! extraction code to work with both real devices (via WPD) and mock devices.
 //!
+//! Key components:
 //! - **Mock Devices**: Simulated iOS devices with configurable properties
-//! - **Virtual File Systems**: In-memory file systems that mimic real device storage
+//! - **Mock File Systems**: In-memory file systems that mimic real device storage
 //! - **Test Scenarios**: Pre-built scenarios covering various use cases and edge cases
 //! - **Data Generators**: Tools to create realistic mock file content
 //! - **Test Runner**: Execute scenarios and generate reports
@@ -79,30 +76,74 @@
 //! - `realistic_iphone` - 2500+ files like real iPhone
 //! - `stress_test` - 10,000 files maximum stress
 
+#![allow(dead_code)]
+#![allow(unused_imports)]
+
+pub mod assertions;
 pub mod generator;
+pub mod integration;
 pub mod mock_device;
 pub mod runner;
 pub mod scenarios;
 
-// Re-export commonly used types for convenience
-pub use generator::{FileGeneratorConfig, MockDataGenerator};
-pub use mock_device::{
-    MockDeviceConfig, MockDeviceInfo, MockDeviceManager, MockFileSystem, MockObject,
+// Re-export commonly used types from assertions
+pub use assertions::{
+    AssertionCollection, AssertionResult, Benchmark, BenchmarkComparison, BenchmarkResult,
+    DeviceFixtureBuilder, FileSystemFixtureBuilder, ScenarioFixtureBuilder, TestAssertions,
 };
+
+// Re-export commonly used types from generator
+pub use generator::{FileGeneratorConfig, MockDataGenerator};
+
+// Re-export memory-efficient test size constants
+pub use generator::{
+    TEST_CONTENT_MAX_SIZE, TEST_HEIC_SIZE, TEST_JPEG_SIZE, TEST_PNG_SIZE, TEST_STRESS_SIZE,
+    TEST_VIDEO_SIZE,
+};
+
+// Re-export integration test utilities
+pub use integration::{
+    run_full_integration_tests, run_integration_tests, run_quick_integration_tests,
+    IntegrationTestConfig, IntegrationTestResult, IntegrationTestRunner, IntegrationTestSummary,
+};
+
+// Re-export commonly used types from mock_device
+pub use mock_device::{
+    MockDeviceConfig, MockDeviceContent, MockDeviceManager, MockFileSystem, MockObject,
+};
+
+// Re-export DeviceInfo from the traits module for convenience
+pub use crate::device::traits::DeviceInfo as MockDeviceInfo;
+
+// Re-export commonly used types from runner
 pub use runner::{
     ExecutionStats, InteractiveTestMode, ScenarioResult, TestRunner, TestRunnerConfig, TestSummary,
 };
+
+// Re-export commonly used types from scenarios
 pub use scenarios::{ExpectedResults, ScenarioLibrary, TestScenario};
 
 /// Prelude module for easy imports
 pub mod prelude {
+    pub use super::assertions::{
+        Benchmark, DeviceFixtureBuilder, FileSystemFixtureBuilder, ScenarioFixtureBuilder,
+        TestAssertions,
+    };
     pub use super::generator::MockDataGenerator;
+    pub use super::integration::{IntegrationTestConfig, IntegrationTestRunner};
     pub use super::mock_device::{
-        MockDeviceConfig, MockDeviceInfo, MockDeviceManager, MockFileSystem, MockObject,
+        MockDeviceConfig, MockDeviceContent, MockDeviceManager, MockFileSystem, MockObject,
     };
     pub use super::runner::{TestRunner, TestRunnerConfig, TestSummary};
     pub use super::scenarios::{ScenarioLibrary, TestScenario};
+    pub use crate::device::traits::{
+        DeviceContentTrait, DeviceInfo, DeviceManagerTrait, DeviceObject,
+    };
 }
+
+// =============================================================================
+// Convenience functions
+// =============================================================================
 
 /// Quick function to run all tests with default settings
 pub fn run_all_tests() -> TestSummary {
@@ -150,6 +191,16 @@ pub fn list_tags() -> Vec<String> {
     tags
 }
 
+/// Run all integration tests and print results
+pub fn run_and_print_integration_tests() -> IntegrationTestSummary {
+    let results = run_integration_tests();
+    integration::print_integration_results(&results);
+
+    let mut runner = IntegrationTestRunner::new();
+    runner.run_all();
+    runner.summary()
+}
+
 /// Print available scenarios to console
 pub fn print_available_scenarios() {
     println!("\n╔══════════════════════════════════════════════════════════════╗");
@@ -166,7 +217,7 @@ pub fn print_available_scenarios() {
         let category = scenario
             .tags
             .first()
-            .map(|s| s.clone())
+            .cloned()
             .unwrap_or_else(|| "other".to_string());
         by_category.entry(category).or_default().push(scenario);
     }
@@ -187,9 +238,72 @@ pub fn print_available_scenarios() {
     println!("Total: {} scenarios available\n", scenarios.len());
 }
 
+/// Create a simple mock device manager with a standard iPhone for quick testing
+pub fn create_simple_mock_device() -> MockDeviceManager {
+    let mut manager = MockDeviceManager::new();
+
+    let device = MockDeviceInfo::new(
+        "mock-device-001",
+        "Test iPhone",
+        "Apple Inc.",
+        "iPhone 15 Pro",
+    );
+
+    let mut fs = MockFileSystem::new();
+    fs.add_standard_dcim_structure(10, 2);
+
+    manager.add_device(device, fs);
+    manager
+}
+
+/// Create a mock device manager with multiple devices for testing device selection
+pub fn create_multi_device_mock() -> MockDeviceManager {
+    let mut manager = MockDeviceManager::new();
+
+    // First iPhone
+    let device1 = MockDeviceInfo::new(
+        "mock-device-001",
+        "Alice's iPhone",
+        "Apple Inc.",
+        "iPhone 15",
+    );
+    let mut fs1 = MockFileSystem::new();
+    fs1.add_standard_dcim_structure(20, 2);
+    manager.add_device(device1, fs1);
+
+    // Second iPhone
+    let device2 = MockDeviceInfo::new(
+        "mock-device-002",
+        "Bob's iPhone",
+        "Apple Inc.",
+        "iPhone 14 Pro",
+    );
+    let mut fs2 = MockFileSystem::new();
+    fs2.add_standard_dcim_structure(15, 3);
+    manager.add_device(device2, fs2);
+
+    // iPad
+    let device3 = MockDeviceInfo::new(
+        "mock-device-003",
+        "Family iPad",
+        "Apple Inc.",
+        "iPad Pro 12.9-inch",
+    );
+    let mut fs3 = MockFileSystem::new();
+    fs3.add_standard_dcim_structure(50, 5);
+    manager.add_device(device3, fs3);
+
+    manager
+}
+
+// =============================================================================
+// Tests
+// =============================================================================
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::device::traits::{DeviceContentTrait, DeviceManagerTrait};
 
     #[test]
     fn test_module_exports() {
@@ -214,5 +328,35 @@ mod tests {
     fn test_quick_tests_run() {
         let summary = run_quick_tests();
         assert!(summary.total > 0);
+    }
+
+    #[test]
+    fn test_simple_mock_device() {
+        let manager = create_simple_mock_device();
+
+        let devices = manager.enumerate_apple_devices().unwrap();
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].friendly_name, "Test iPhone");
+
+        let content = manager.open_device(&devices[0].device_id).unwrap();
+        let root = content.enumerate_objects().unwrap();
+        assert!(!root.is_empty());
+    }
+
+    #[test]
+    fn test_multi_device_mock() {
+        let manager = create_multi_device_mock();
+
+        let devices = manager.enumerate_apple_devices().unwrap();
+        assert_eq!(devices.len(), 3);
+    }
+
+    #[test]
+    fn test_prelude_imports() {
+        use super::prelude::*;
+
+        let _ = MockFileSystem::new();
+        let _ = MockDeviceManager::new();
+        let _ = TestRunner::new();
     }
 }

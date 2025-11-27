@@ -2,9 +2,35 @@
 //!
 //! This module generates mock file content that mimics real image and video files
 //! with proper headers and structure for testing purposes.
+//!
+//! Note: Content sizes are kept small by default to prevent memory issues during testing.
+//! The file headers are realistic enough for testing extraction logic without needing
+//! megabytes of actual data.
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+
+// =============================================================================
+// CONSTANTS FOR MEMORY-EFFICIENT TESTING
+// =============================================================================
+
+/// Maximum content size for test files (4KB) - enough for headers and testing
+pub const TEST_CONTENT_MAX_SIZE: usize = 4 * 1024;
+
+/// Default content size for JPEG test files
+pub const TEST_JPEG_SIZE: usize = 2 * 1024;
+
+/// Default content size for HEIC test files
+pub const TEST_HEIC_SIZE: usize = 2 * 1024;
+
+/// Default content size for PNG test files
+pub const TEST_PNG_SIZE: usize = 1024;
+
+/// Default content size for video test files (MOV, MP4, etc.)
+pub const TEST_VIDEO_SIZE: usize = 4 * 1024;
+
+/// Default content size for stress test files (minimal)
+pub const TEST_STRESS_SIZE: usize = 512;
 
 /// Configuration for file generation
 #[derive(Debug, Clone)]
@@ -642,15 +668,19 @@ impl MockDataGenerator {
     }
 
     /// Generate a realistic photo library batch
+    ///
+    /// Note: Uses small content sizes by default to prevent memory issues.
+    /// The reported file sizes can be set separately from actual content.
     pub fn generate_photo_library(total_files: usize) -> Vec<(String, Vec<u8>)> {
-        let mut files = Vec::new();
+        let mut files = Vec::with_capacity(total_files);
 
         for i in 0..total_files {
+            // Use lightweight content sizes - actual test only needs valid headers
             let (ext, size) = match i % 10 {
-                0..=5 => ("HEIC", 2 * 1024 * 1024), // 60% HEIC at 2MB
-                6..=7 => ("JPG", 1024 * 1024),      // 20% JPG at 1MB
-                8 => ("MOV", 50 * 1024 * 1024),     // 10% MOV at 50MB
-                _ => ("PNG", 500 * 1024),           // 10% PNG at 500KB
+                0..=5 => ("HEIC", TEST_HEIC_SIZE), // 60% HEIC
+                6..=7 => ("JPG", TEST_JPEG_SIZE),  // 20% JPG
+                8 => ("MOV", TEST_VIDEO_SIZE),     // 10% MOV
+                _ => ("PNG", TEST_PNG_SIZE),       // 10% PNG
             };
 
             let filename = format!("IMG_{:04}.{}", i, ext);
@@ -660,6 +690,27 @@ impl MockDataGenerator {
         }
 
         files
+    }
+
+    /// Generate lightweight content for testing - uses minimal memory
+    ///
+    /// This generates just enough data for valid file headers without
+    /// allocating large amounts of memory.
+    pub fn generate_lightweight(extension: &str, seed: u64) -> Vec<u8> {
+        let size = match extension.to_lowercase().as_str() {
+            "mov" | "mp4" | "m4v" | "avi" | "3gp" => TEST_VIDEO_SIZE,
+            "heic" | "heif" => TEST_HEIC_SIZE,
+            "jpg" | "jpeg" => TEST_JPEG_SIZE,
+            "png" => TEST_PNG_SIZE,
+            _ => TEST_STRESS_SIZE,
+        };
+        Self::generate_for_extension_with_seed(extension, size, seed)
+    }
+
+    /// Generate content capped at a maximum size for memory efficiency
+    pub fn generate_capped(extension: &str, requested_size: usize, seed: u64) -> Vec<u8> {
+        let actual_size = requested_size.min(TEST_CONTENT_MAX_SIZE);
+        Self::generate_for_extension_with_seed(extension, actual_size, seed)
     }
 }
 

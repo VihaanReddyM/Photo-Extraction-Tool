@@ -7,7 +7,7 @@
 
 use crate::core::config::{DeviceProfile, DeviceProfilesConfig};
 use crate::core::error::{ExtractionError, Result};
-use crate::device::wpd::DeviceInfo;
+use crate::device::DeviceInfo;
 use chrono::Utc;
 use dialoguer::{Confirm, Input};
 use log::{debug, info, warn};

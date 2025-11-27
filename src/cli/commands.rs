@@ -6,6 +6,7 @@ use crate::cli::progress::{BenchmarkProgress, ScanProgressTracker};
 use crate::cli::{Args, Commands, TestCommands};
 use crate::core::config::{get_config_path, init_config, open_config_in_editor, Config};
 use crate::core::extractor;
+use crate::device::traits::{DeviceContentTrait, DeviceManagerTrait};
 use crate::device::{self, ProfileManager};
 use crate::testdb::{
     self, InteractiveTestMode, MockDataGenerator, ScenarioLibrary, TestRunner, TestRunnerConfig,
@@ -356,8 +357,7 @@ pub fn scan_device(config: &Config, max_depth: usize) -> Result<()> {
     info!("Selected device: {}", target_device.friendly_name);
 
     // Open device
-    let device = manager.open_device(&target_device.device_id)?;
-    let content = device.get_content()?;
+    let content = manager.open_device(&target_device.device_id)?;
 
     info!("Scanning device structure (max depth: {})...", max_depth);
     info!("");
@@ -404,8 +404,7 @@ pub fn benchmark_scan(config: &Config, dcim_only: bool) -> Result<()> {
     info!("");
 
     // Open device
-    let device = manager.open_device(&target_device.device_id)?;
-    let content = device.get_content()?;
+    let content = manager.open_device(&target_device.device_id)?;
 
     // Create progress tracker
     let progress = BenchmarkProgress::new();
@@ -661,7 +660,7 @@ fn test_run_all(
     output: Option<PathBuf>,
     fail_fast: bool,
 ) -> Result<()> {
-    let report_dir = output.map(|p| p.to_string_lossy().to_string());
+    let report_dir = output;
 
     let config = TestRunnerConfig {
         verbose: true,
@@ -966,24 +965,24 @@ fn test_simulate_extract(
             let mut errors = 0;
 
             for obj in s.file_system.all_objects() {
-                if obj.is_folder {
+                if obj.is_folder() {
                     continue;
                 }
 
-                let file_path = output.join(&obj.name);
+                let file_path = output.join(&obj.name());
 
                 if let Some(ref content) = obj.content {
                     match fs::write(&file_path, content) {
                         Ok(_) => {
                             extracted += 1;
                             if verbose {
-                                println!("  ✓ Extracted: {} ({} bytes)", obj.name, obj.size);
+                                println!("  ✓ Extracted: {} ({} bytes)", obj.name(), obj.size());
                             }
                         }
                         Err(e) => {
                             errors += 1;
                             if verbose {
-                                println!("  ✗ Error: {} - {}", obj.name, e);
+                                println!("  ✗ Error: {} - {}", obj.name(), e);
                             }
                         }
                     }
@@ -1111,7 +1110,6 @@ fn test_benchmark_mock(file_count: usize, iterations: usize) -> Result<()> {
                 &format!("file_{}", i),
                 "100apple",
                 &format!("IMG_{:05}.JPG", i),
-                content.len() as u64,
                 content,
             ));
         }
