@@ -111,19 +111,6 @@ pub fn open_config_in_editor() -> Result<PathBuf, ConfigError> {
     Ok(config_path)
 }
 
-/// Hash algorithm for duplicate detection
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum HashAlgorithm {
-    /// Perceptual hash - compares visual content (works across formats)
-    #[default]
-    Perceptual,
-    /// EXIF-based comparison (date taken, dimensions)
-    Exif,
-    /// File size based (fast but less accurate)
-    Size,
-}
-
 /// Action to take when a duplicate is found
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -283,32 +270,33 @@ pub struct LoggingConfig {
 }
 
 /// Duplicate detection configuration
+///
+/// Uses SHA256 cryptographic hashing for exact-match duplicate detection.
+/// This is reliable, fast, and works for all file types (photos and videos).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DuplicateDetectionConfig {
-    /// Enable duplicate detection
+    /// Enable duplicate detection during extraction
     pub enabled: bool,
 
     /// Folder(s) to compare against for duplicates
+    /// Files in these folders will be indexed and compared against incoming files
     pub comparison_folders: Vec<PathBuf>,
 
-    /// Hash algorithm to use for comparison
-    pub hash_algorithm: HashAlgorithm,
-
-    /// Hash size for perceptual hashing (8, 16, or 32)
-    pub hash_size: u32,
-
-    /// Hamming distance threshold for perceptual hash matching (0 = exact, higher = more lenient)
-    pub similarity_threshold: u32,
-
     /// Cache the hash index for faster subsequent runs
-    pub cache_index: bool,
+    pub cache_enabled: bool,
 
-    /// Path to cache file
+    /// Path to cache file (JSON format)
     pub cache_file: PathBuf,
 
     /// Action to take when a duplicate is found
     pub duplicate_action: DuplicateAction,
+
+    /// Scan comparison folders recursively (include subdirectories)
+    pub recursive: bool,
+
+    /// Only index media files (photos/videos) vs all files
+    pub media_only: bool,
 }
 
 /// Tracking configuration for remembering device and extraction state
@@ -387,12 +375,27 @@ impl Default for DuplicateDetectionConfig {
         Self {
             enabled: false,
             comparison_folders: vec![],
-            hash_algorithm: HashAlgorithm::Perceptual,
-            hash_size: 8,
-            similarity_threshold: 5,
-            cache_index: true,
-            cache_file: PathBuf::from("./photo_hash_cache.bin"),
+            cache_enabled: true,
+            cache_file: PathBuf::from("./.duplicate_cache.json"),
             duplicate_action: DuplicateAction::Skip,
+            recursive: true,
+            media_only: true,
+        }
+    }
+}
+
+impl DuplicateDetectionConfig {
+    /// Convert to the duplicate detector's config format
+    pub fn to_detector_config(&self) -> crate::duplicate::DuplicateConfig {
+        crate::duplicate::DuplicateConfig {
+            comparison_folders: self.comparison_folders.clone(),
+            cache_enabled: self.cache_enabled,
+            cache_file: self.cache_file.clone(),
+            recursive: self.recursive,
+            follow_symlinks: false,
+            min_file_size: 0,
+            max_file_size: 0,
+            media_only: self.media_only,
         }
     }
 }

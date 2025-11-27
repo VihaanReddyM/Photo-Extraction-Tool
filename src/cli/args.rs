@@ -39,6 +39,18 @@ pub struct Args {
     #[arg(short, long)]
     pub skip_existing: Option<bool>,
 
+    /// Enable duplicate detection using SHA256 hashing
+    #[arg(long)]
+    pub detect_duplicates: bool,
+
+    /// Folder(s) to compare against for duplicates (can be specified multiple times)
+    #[arg(long = "compare-to", value_name = "FOLDER")]
+    pub compare_folders: Vec<PathBuf>,
+
+    /// Action to take when a duplicate is found: skip, rename, or overwrite
+    #[arg(long, value_name = "ACTION", value_parser = ["skip", "rename", "overwrite"])]
+    pub duplicate_action: Option<String>,
+
     /// List all portable devices (not just Apple devices)
     #[arg(long)]
     pub all_devices: bool,
@@ -51,7 +63,19 @@ pub struct Args {
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     /// Extract photos from the connected device
-    Extract,
+    Extract {
+        /// Enable duplicate detection using SHA256 hashing
+        #[arg(long)]
+        detect_duplicates: bool,
+
+        /// Folder(s) to compare against for duplicates (can be specified multiple times)
+        #[arg(long = "compare-to", value_name = "FOLDER")]
+        compare_folders: Vec<PathBuf>,
+
+        /// Action to take when a duplicate is found: skip, rename, or overwrite
+        #[arg(long, value_name = "ACTION", value_parser = ["skip", "rename", "overwrite"])]
+        duplicate_action: Option<String>,
+    },
 
     /// List connected devices
     List {

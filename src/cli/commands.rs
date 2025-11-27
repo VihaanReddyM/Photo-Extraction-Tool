@@ -38,8 +38,30 @@ pub fn run_command(args: &Args, config: &Config, shutdown_flag: Arc<AtomicBool>)
         Some(Commands::Scan { depth }) => {
             scan_device(config, *depth)?;
         }
-        Some(Commands::Extract) | None => {
-            extract_photos(config, shutdown_flag)?;
+        Some(Commands::Extract {
+            detect_duplicates,
+            compare_folders,
+            duplicate_action,
+        }) => {
+            // Merge command-level args with global args
+            let use_detect = *detect_duplicates || args.detect_duplicates;
+            let mut folders = compare_folders.clone();
+            folders.extend(args.compare_folders.clone());
+            let action = duplicate_action
+                .clone()
+                .or_else(|| args.duplicate_action.clone());
+
+            extract_photos_with_args(config, shutdown_flag, use_detect, folders, action)?;
+        }
+        None => {
+            // Use global args when no subcommand specified
+            extract_photos_with_args(
+                config,
+                shutdown_flag,
+                args.detect_duplicates,
+                args.compare_folders.clone(),
+                args.duplicate_action.clone(),
+            )?;
         }
         Some(Commands::ListProfiles) => {
             list_profiles(config)?;
@@ -286,6 +308,38 @@ pub fn show_config(config: &Config) {
     info!("");
     info!("[logging]");
     info!("  level = \"{}\"", config.logging.level);
+    info!("");
+    info!("[duplicate_detection]");
+    info!("  enabled = {}", config.duplicate_detection.enabled);
+    info!(
+        "  comparison_folders = {:?}",
+        config.duplicate_detection.comparison_folders
+    );
+    info!(
+        "  cache_enabled = {}",
+        config.duplicate_detection.cache_enabled
+    );
+    info!(
+        "  cache_file = \"{}\"",
+        config.duplicate_detection.cache_file.display()
+    );
+    info!(
+        "  duplicate_action = {:?}",
+        config.duplicate_detection.duplicate_action
+    );
+    info!("  recursive = {}", config.duplicate_detection.recursive);
+    info!("  media_only = {}", config.duplicate_detection.media_only);
+    info!("");
+    info!("[tracking]");
+    info!("  enabled = {}", config.tracking.enabled);
+    info!(
+        "  tracking_filename = \"{}\"",
+        config.tracking.tracking_filename
+    );
+    info!(
+        "  track_extracted_files = {}",
+        config.tracking.track_extracted_files
+    );
 }
 
 /// List connected devices
@@ -457,7 +511,14 @@ pub fn benchmark_scan(config: &Config, dcim_only: bool) -> Result<()> {
 }
 
 /// Extract photos from the connected device
-pub fn extract_photos(config: &Config, shutdown_flag: Arc<AtomicBool>) -> Result<()> {
+/// Extract photos with command-line arguments for duplicate detection
+pub fn extract_photos_with_args(
+    config: &Config,
+    shutdown_flag: Arc<AtomicBool>,
+    detect_duplicates: bool,
+    compare_folders: Vec<PathBuf>,
+    duplicate_action: Option<String>,
+) -> Result<()> {
     // Initialize COM library (required for WPD)
     let _com_guard = device::initialize_com()?;
 
@@ -517,16 +578,52 @@ pub fn extract_photos(config: &Config, shutdown_flag: Arc<AtomicBool>) -> Result
     }
 
     // Convert config to extraction config
+    // Build duplicate detection config from CLI args or config file
+    let duplicate_detection = if detect_duplicates || !compare_folders.is_empty() {
+        // CLI args take precedence
+        let action = match duplicate_action.as_deref() {
+            Some("skip") => crate::core::config::DuplicateAction::Skip,
+            Some("rename") => crate::core::config::DuplicateAction::Rename,
+            Some("overwrite") => crate::core::config::DuplicateAction::Overwrite,
+            _ => config.duplicate_detection.duplicate_action.clone(),
+        };
+
+        let folders = if compare_folders.is_empty() {
+            config.duplicate_detection.comparison_folders.clone()
+        } else {
+            compare_folders
+        };
+
+        if !folders.is_empty() {
+            info!(
+                "Duplicate detection enabled, comparing against {} folder(s)",
+                folders.len()
+            );
+            Some(crate::core::config::DuplicateDetectionConfig {
+                enabled: true,
+                comparison_folders: folders,
+                cache_enabled: config.duplicate_detection.cache_enabled,
+                cache_file: config.duplicate_detection.cache_file.clone(),
+                duplicate_action: action,
+                recursive: config.duplicate_detection.recursive,
+                media_only: config.duplicate_detection.media_only,
+            })
+        } else {
+            warn!("Duplicate detection requested but no comparison folders specified");
+            None
+        }
+    } else if config.duplicate_detection.enabled {
+        Some(config.duplicate_detection.clone())
+    } else {
+        None
+    };
+
     let extraction_config = extractor::ExtractionConfig {
         output_dir: output_dir.clone(),
         dcim_only: config.extraction.dcim_only,
         preserve_structure: config.output.preserve_structure,
         skip_existing: config.output.skip_existing,
-        duplicate_detection: if config.duplicate_detection.enabled {
-            Some(config.duplicate_detection.clone())
-        } else {
-            None
-        },
+        duplicate_detection,
         tracking: if config.tracking.enabled {
             Some(config.tracking.clone())
         } else {

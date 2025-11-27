@@ -13,7 +13,7 @@ A fast, reliable command-line tool for extracting photos and videos from iOS dev
 - **🚀 Fast & Efficient** — Direct device access via Windows Portable Devices (WPD) API
 - **📱 No iTunes Required** — Works independently, no Apple software needed
 - **🔄 Incremental Backups** — Only extract new photos, skip existing ones
-- **🔍 Duplicate Detection** — Perceptual hashing to avoid re-downloading duplicates
+- **🔍 Duplicate Detection** — SHA256 hashing to detect exact duplicates (photos & videos)
 - **👥 Multi-Device Support** — Manage and organize photos from multiple devices
 - **📁 Flexible Organization** — Preserve folder structure or organize by date
 - **⏸️ Resume Support** — Interrupted? Continue from where you left off
@@ -74,7 +74,10 @@ photo-extraction-tool
 photo-extraction-tool --output "D:/Photos/iPhone Backup"
 
 # List connected devices
-photo-extraction-tool --list-devices
+photo-extraction-tool list
+
+# Extract with duplicate detection
+photo-extraction-tool extract --detect-duplicates --compare-to "D:/ExistingPhotos"
 
 # Open the config file in your default editor
 photo-extraction-tool config
@@ -129,7 +132,9 @@ photo-extraction-tool --help
 | `--output <DIR>` | `-o` | Output directory for extracted photos |
 | `--config <FILE>` | `-c` | Path to configuration file |
 | `--device <ID>` | `-d` | Specific device ID to use |
-| `--list-devices` | `-l` | List all connected devices |
+| `--detect-duplicates` | | Enable SHA256 duplicate detection |
+| `--compare-to <DIR>` | | Folder to compare against (repeatable) |
+| `--duplicate-action` | | Action for duplicates: skip, rename, overwrite |
 
 | `--verbose` | `-v` | Increase verbosity (can be repeated) |
 | `--quiet` | `-q` | Suppress non-error output |
@@ -256,20 +261,24 @@ max_file_size = 0
 
 ```toml
 [duplicate_detection]
+# Enable SHA256-based exact duplicate detection
 enabled = false
 
-# Folders to compare against
+# Folders to compare against (will be indexed)
 comparison_folders = ["D:/Photos", "D:/Old Backups"]
 
-# Algorithm: "perceptual", "exif", or "size"
-hash_algorithm = "perceptual"
+# Cache hashes for faster subsequent runs (JSON format)
+cache_enabled = true
+cache_file = "./.duplicate_cache.json"
 
-# Similarity threshold (0 = exact, 5 = similar)
-similarity_threshold = 5
+# Action when duplicate found: "skip", "rename", or "overwrite"
+duplicate_action = "skip"
 
-# Cache hashes for faster subsequent runs
-cache_index = true
-cache_file = "./photo_hash_cache.bin"
+# Scan folders recursively
+recursive = true
+
+# Only index media files (photos/videos)
+media_only = true
 ```
 
 </details>
@@ -308,8 +317,9 @@ photo-extraction-tool -o "D:/Backup"
 
 ### Duplicate Detection
 
-Avoid extracting photos you already have elsewhere:
+Avoid extracting files you already have elsewhere. Uses SHA256 hashing for exact-match detection — works with both photos AND videos:
 
+**Via Config File:**
 ```toml
 [duplicate_detection]
 enabled = true
@@ -317,11 +327,25 @@ comparison_folders = [
     "D:/Photos/Main Library",
     "D:/Backups/Old iPhone"
 ]
-hash_algorithm = "perceptual"
-similarity_threshold = 5
+duplicate_action = "skip"
 ```
 
-The perceptual hash algorithm detects duplicates even if they've been resized or re-encoded.
+**Via Command Line:**
+```bash
+# Enable duplicate detection with one or more comparison folders
+photo-extraction-tool extract --detect-duplicates --compare-to "D:/Photos" --compare-to "E:/Backup"
+
+# Specify what to do with duplicates
+photo-extraction-tool extract --detect-duplicates --compare-to "D:/Photos" --duplicate-action skip
+```
+
+**How it works:**
+1. Scans comparison folders and computes SHA256 hashes (parallel, cached)
+2. For each file from your device, first checks if any indexed file has the same size (fast rejection)
+3. If sizes match, computes SHA256 hash and checks for exact match
+4. Takes configured action: skip, rename, or overwrite
+
+The SHA256 algorithm detects exact duplicates reliably and works for any file type.
 
 ### Multi-Device Management
 
@@ -440,7 +464,7 @@ src/
 │   └── profiles.rs      # Device profile management
 └── duplicate/           # Duplicate detection
     ├── mod.rs           # Duplicate module exports
-    └── detector.rs      # Photo hash index and duplicate detection
+    └── detector.rs      # SHA256-based duplicate detection index
 ```
 
 ### Architecture Overview
@@ -449,7 +473,7 @@ src/
 - **`cli/`** - All CLI-specific code is isolated here, making it easy to add alternative interfaces
 - **`core/`** - Business logic that's independent of the interface (config, extraction, tracking)
 - **`device/`** - Hardware interaction layer (WPD API, device profiles)
-- **`duplicate/`** - Duplicate detection algorithms (perceptual hashing, EXIF, etc.)
+- **`duplicate/`** - SHA256-based duplicate detection with size pre-filtering and caching
 
 This separation allows for:
 - Easy addition of a GUI without modifying core logic

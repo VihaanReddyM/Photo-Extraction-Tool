@@ -47,10 +47,8 @@ toml = "0.8"
 # Signal handling for graceful shutdown
 ctrlc = "3.4"
 
-# Image processing for duplicate detection
-image = { version = "0.23", default-features = false, features = ["jpeg", "png", "gif", "bmp", "webp"] }
-img_hash = "3.2"
-kamadak-exif = "0.5"
+# Duplicate detection
+sha2 = "0.10"
 walkdir = "2.5"
 
 # Multi-threading

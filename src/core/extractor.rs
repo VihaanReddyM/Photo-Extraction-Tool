@@ -12,7 +12,7 @@ use crate::core::error::{ExtractionError, Result};
 use crate::core::tracking::StateTracker;
 use crate::device::traits::{DeviceContentTrait, DeviceInfo, DeviceManagerTrait, DeviceObject};
 use crate::device::wpd::{DeviceContent, DeviceManager};
-use crate::duplicate::detector::PhotoHashIndex;
+use crate::duplicate::{compute_data_hash, DuplicateIndex};
 use indicatif::{ProgressBar, ProgressStyle};
 use log::{debug, info, trace, warn};
 use std::fs::{self, File};
@@ -191,11 +191,24 @@ pub fn extract_photos(
     let hash_index = if let Some(ref dup_config) = config.duplicate_detection {
         if dup_config.enabled && !dup_config.comparison_folders.is_empty() {
             info!("Building duplicate detection index...");
-            match PhotoHashIndex::build_from_folders(dup_config, shutdown_flag.clone()) {
+            let detector_config = dup_config.to_detector_config();
+            match DuplicateIndex::build_from_folders(
+                &detector_config,
+                shutdown_flag.clone(),
+                |progress| {
+                    if progress.current % 100 == 0 {
+                        debug!(
+                            "Indexing progress: {}/{} files",
+                            progress.current, progress.total
+                        );
+                    }
+                },
+            ) {
                 Ok(index) => {
                     info!(
-                        "Duplicate detection index built with {} entries",
-                        index.len()
+                        "Duplicate detection index built with {} entries ({} unique hashes)",
+                        index.len(),
+                        index.stats().unique_hashes
                     );
                     Some(index)
                 }
@@ -507,7 +520,7 @@ fn extract_single_photo(
     content: &DeviceContent,
     photo: &PhotoInfo,
     config: &ExtractionConfig,
-    hash_index: &Option<PhotoHashIndex>,
+    hash_index: &Option<DuplicateIndex>,
 ) -> Result<ExtractResult> {
     // Determine output path
     let output_path = if config.preserve_structure {
@@ -531,9 +544,9 @@ fn extract_single_photo(
     let data = read_file_from_device(content, &photo.object_id)?;
     let bytes = data.len() as u64;
 
-    // Check for duplicates using perceptual hash
+    // Check for duplicates using SHA256 hash
     if let Some(ref index) = hash_index {
-        if let Some(duplicate_path) = index.is_duplicate(&data) {
+        if let Some(duplicate_path) = index.find_duplicate_with_size(&data, bytes) {
             // Determine action based on config
             let action = config
                 .duplicate_detection
@@ -543,7 +556,12 @@ fn extract_single_photo(
 
             match action {
                 DuplicateAction::Skip => {
-                    return Ok(ExtractResult::Duplicate(duplicate_path));
+                    debug!(
+                        "Skipping duplicate of {}: {}",
+                        duplicate_path.display(),
+                        photo.name
+                    );
+                    return Ok(ExtractResult::Duplicate(duplicate_path.to_path_buf()));
                 }
                 DuplicateAction::Overwrite => {
                     // Continue with extraction, will overwrite

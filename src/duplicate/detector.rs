@@ -1,67 +1,343 @@
-//! Duplicate detection module
+//! Duplicate Detection Module
 //!
-//! Provides functionality to detect duplicate photos using perceptual hashing,
-//! EXIF metadata comparison, or file size matching.
+//! Provides efficient duplicate file detection using SHA256 cryptographic hashing.
+//! This module is designed for exact-match duplicate detection, which is reliable,
+//! fast, and works for all file types (photos, videos, etc.).
 //!
-//! This module builds an index of existing photos from specified folders and
-//! compares incoming photos against this index to avoid extracting duplicates.
+//! # Architecture
+//!
+//! The module uses a two-tier lookup strategy for efficiency:
+//! 1. **Size Index**: Files are first grouped by size (O(1) lookup)
+//! 2. **Hash Index**: Only files with matching sizes are hash-compared
+//!
+//! This avoids computing expensive SHA256 hashes for files that can't possibly
+//! be duplicates (different sizes).
+//!
+//! # Example
+//!
+//! ```rust,no_run
+//! use photo_extraction_tool::duplicate::detector::{DuplicateIndex, DuplicateConfig};
+//! use std::path::PathBuf;
+//! use std::sync::Arc;
+//! use std::sync::atomic::AtomicBool;
+//!
+//! // Create configuration
+//! let config = DuplicateConfig::new()
+//!     .with_folder(PathBuf::from("D:/Photos"))
+//!     .with_cache_file(PathBuf::from("./duplicate_cache.json"));
+//!
+//! // Build index from folders
+//! let shutdown = Arc::new(AtomicBool::new(false));
+//! let index = DuplicateIndex::build_from_folders(&config, shutdown, |p| {
+//!     println!("Progress: {}/{}", p.current, p.total);
+//! }).unwrap();
+//!
+//! // Check if data is a duplicate
+//! let file_data = std::fs::read("some_file.jpg").unwrap();
+//! if let Some(original) = index.find_duplicate(&file_data) {
+//!     println!("Duplicate of: {}", original.display());
+//! }
+//! ```
 
-use crate::core::config::{DuplicateDetectionConfig, HashAlgorithm};
 use crate::core::error::{ExtractionError, Result};
-use img_hash::{HasherConfig, ImageHash};
-use indicatif::{ProgressBar, ProgressStyle};
-use log::{debug, info, trace, warn};
+use log::{info, trace, warn};
 use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs::{self, File};
-use std::io::{BufReader, BufWriter, Read, Write};
+use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::SystemTime;
 use walkdir::WalkDir;
 
-/// Supported image extensions for hashing
-const SUPPORTED_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "gif", "webp", "bmp", "tiff", "tif"];
+/// Buffer size for streaming hash computation (64KB)
+const HASH_BUFFER_SIZE: usize = 64 * 1024;
 
-/// Index of photo hashes for duplicate detection
-#[derive(Debug)]
-pub struct PhotoHashIndex {
-    /// Perceptual hashes mapped to file paths
-    perceptual_hashes: Vec<(ImageHash, PathBuf)>,
-    /// EXIF-based keys (date_taken + dimensions) mapped to file paths
-    exif_keys: HashMap<String, PathBuf>,
-    /// File sizes mapped to file paths (for size-based matching)
-    size_map: HashMap<u64, Vec<PathBuf>>,
-    /// Configuration
-    config: DuplicateDetectionConfig,
-    /// Hash size used
-    hash_size: u32,
+/// Supported media file extensions
+const MEDIA_EXTENSIONS: &[&str] = &[
+    // Photos
+    "jpg", "jpeg", "png", "gif", "webp", "bmp", "tiff", "tif", "heic", "heif", "raw", "cr2", "nef",
+    "arw", "dng", // Videos
+    "mp4", "mov", "avi", "mkv", "m4v", "3gp", "wmv", "flv", "webm",
+];
+
+/// SHA256 hash represented as a fixed-size array
+pub type Sha256Hash = [u8; 32];
+
+/// Progress information for index building
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct IndexProgress {
+    /// Current file being processed
+    pub current: usize,
+    /// Total files to process
+    pub total: usize,
+    /// Current file path (if available)
+    pub current_file: Option<PathBuf>,
+    /// Number of files successfully hashed
+    pub hashed: usize,
+    /// Number of errors encountered
+    pub errors: usize,
 }
 
-impl PhotoHashIndex {
-    /// Create a new empty index
-    pub fn new(config: &DuplicateDetectionConfig) -> Self {
+/// Configuration for duplicate detection
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DuplicateConfig {
+    /// Folders to scan for existing files
+    pub comparison_folders: Vec<PathBuf>,
+
+    /// Whether to cache the index to disk
+    pub cache_enabled: bool,
+
+    /// Path to the cache file
+    pub cache_file: PathBuf,
+
+    /// Whether to include subdirectories when scanning
+    pub recursive: bool,
+
+    /// Whether to follow symbolic links
+    pub follow_symlinks: bool,
+
+    /// Minimum file size to consider (0 = no minimum)
+    pub min_file_size: u64,
+
+    /// Maximum file size to consider (0 = no maximum)
+    pub max_file_size: u64,
+
+    /// Only index media files (photos/videos)
+    pub media_only: bool,
+}
+
+impl Default for DuplicateConfig {
+    fn default() -> Self {
         Self {
-            perceptual_hashes: Vec::new(),
-            exif_keys: HashMap::new(),
-            size_map: HashMap::new(),
-            config: config.clone(),
-            hash_size: config.hash_size,
+            comparison_folders: Vec::new(),
+            cache_enabled: true,
+            cache_file: PathBuf::from("./.duplicate_cache.json"),
+            recursive: true,
+            follow_symlinks: false,
+            min_file_size: 0,
+            max_file_size: 0,
+            media_only: true,
+        }
+    }
+}
+
+#[allow(dead_code)]
+impl DuplicateConfig {
+    /// Create a new default configuration
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Add a folder to compare against
+    pub fn with_folder(mut self, folder: PathBuf) -> Self {
+        self.comparison_folders.push(folder);
+        self
+    }
+
+    /// Add multiple folders to compare against
+    pub fn with_folders(mut self, folders: Vec<PathBuf>) -> Self {
+        self.comparison_folders.extend(folders);
+        self
+    }
+
+    /// Set the cache file path
+    pub fn with_cache_file(mut self, path: PathBuf) -> Self {
+        self.cache_file = path;
+        self
+    }
+
+    /// Enable or disable caching
+    pub fn with_cache(mut self, enabled: bool) -> Self {
+        self.cache_enabled = enabled;
+        self
+    }
+
+    /// Set whether to scan recursively
+    pub fn with_recursive(mut self, recursive: bool) -> Self {
+        self.recursive = recursive;
+        self
+    }
+
+    /// Set minimum file size
+    pub fn with_min_size(mut self, size: u64) -> Self {
+        self.min_file_size = size;
+        self
+    }
+
+    /// Set maximum file size
+    pub fn with_max_size(mut self, size: u64) -> Self {
+        self.max_file_size = size;
+        self
+    }
+
+    /// Set whether to only index media files
+    pub fn with_media_only(mut self, media_only: bool) -> Self {
+        self.media_only = media_only;
+        self
+    }
+}
+
+/// Entry in the duplicate index
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndexEntry {
+    /// File path
+    pub path: PathBuf,
+    /// File size in bytes
+    pub size: u64,
+    /// SHA256 hash of the file
+    #[serde(with = "hex_hash")]
+    pub hash: Sha256Hash,
+    /// When this entry was indexed
+    #[serde(default = "default_indexed_at")]
+    pub indexed_at: u64,
+}
+
+fn default_indexed_at() -> u64 {
+    0
+}
+
+/// Serde helper for hex encoding/decoding hashes
+mod hex_hash {
+    use super::Sha256Hash;
+    use serde::{self, Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(hash: &Sha256Hash, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let hex_string: String = hash.iter().map(|b| format!("{:02x}", b)).collect();
+        serializer.serialize_str(&hex_string)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Sha256Hash, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        let mut hash = [0u8; 32];
+        if s.len() != 64 {
+            return Err(serde::de::Error::custom("Invalid hash length"));
+        }
+        for (i, chunk) in s.as_bytes().chunks(2).enumerate() {
+            let hex_str = std::str::from_utf8(chunk).map_err(serde::de::Error::custom)?;
+            hash[i] = u8::from_str_radix(hex_str, 16).map_err(serde::de::Error::custom)?;
+        }
+        Ok(hash)
+    }
+}
+
+/// Statistics about the duplicate index
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IndexStats {
+    /// Total number of files indexed
+    pub total_files: usize,
+    /// Total size of all indexed files
+    pub total_bytes: u64,
+    /// Number of unique hashes (some files may be duplicates)
+    pub unique_hashes: usize,
+    /// Number of duplicate groups found within the index
+    pub duplicate_groups: usize,
+    /// Number of files that are duplicates of others in the index
+    pub duplicate_files: usize,
+    /// Number of errors encountered during indexing
+    pub errors: usize,
+    /// Time taken to build the index (in milliseconds)
+    pub build_time_ms: u64,
+}
+
+/// A group of duplicate files
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct DuplicateGroup {
+    /// The shared hash
+    pub hash: Sha256Hash,
+    /// File size (all files in group have same size)
+    pub size: u64,
+    /// Paths of all duplicate files
+    pub paths: Vec<PathBuf>,
+}
+
+/// Cache format for persisting the index
+#[derive(Debug, Serialize, Deserialize)]
+struct IndexCache {
+    /// Version of the cache format
+    version: u32,
+    /// When the cache was created
+    created_at: u64,
+    /// Configuration used to build this cache
+    config_hash: String,
+    /// All indexed entries
+    entries: Vec<IndexEntry>,
+}
+
+impl IndexCache {
+    const CURRENT_VERSION: u32 = 1;
+}
+
+/// The main duplicate detection index
+#[derive(Debug)]
+pub struct DuplicateIndex {
+    /// Size -> list of entries with that size
+    /// This allows O(1) size-based filtering before computing hashes
+    size_index: HashMap<u64, Vec<usize>>,
+
+    /// Hash -> list of entry indices with that hash
+    hash_index: HashMap<Sha256Hash, Vec<usize>>,
+
+    /// All entries in the index
+    entries: Vec<IndexEntry>,
+
+    /// Statistics
+    stats: IndexStats,
+
+    /// Configuration used
+    config: DuplicateConfig,
+}
+
+impl DuplicateIndex {
+    /// Create a new empty index
+    pub fn new(config: DuplicateConfig) -> Self {
+        Self {
+            size_index: HashMap::new(),
+            hash_index: HashMap::new(),
+            entries: Vec::new(),
+            stats: IndexStats::default(),
+            config,
         }
     }
 
-    /// Build index from comparison folders
-    pub fn build_from_folders(
-        config: &DuplicateDetectionConfig,
+    /// Build an index from the configured comparison folders
+    ///
+    /// # Arguments
+    /// * `config` - Configuration specifying folders to scan
+    /// * `shutdown_flag` - Flag to signal early termination
+    /// * `progress_callback` - Called periodically with progress updates
+    pub fn build_from_folders<F>(
+        config: &DuplicateConfig,
         shutdown_flag: Arc<AtomicBool>,
-    ) -> Result<Self> {
-        let mut index = Self::new(config);
+        progress_callback: F,
+    ) -> Result<Self>
+    where
+        F: Fn(IndexProgress) + Send + Sync,
+    {
+        let start_time = std::time::Instant::now();
+        let mut index = Self::new(config.clone());
 
         // Try to load from cache first
-        if config.cache_index && config.cache_file.exists() {
+        if config.cache_enabled && config.cache_file.exists() {
             match index.load_cache(&config.cache_file) {
                 Ok(()) => {
-                    info!("Loaded {} hashes from cache", index.perceptual_hashes.len());
+                    info!(
+                        "Loaded {} entries from cache: {}",
+                        index.entries.len(),
+                        config.cache_file.display()
+                    );
+                    index.stats.build_time_ms = start_time.elapsed().as_millis() as u64;
                     return Ok(index);
                 }
                 Err(e) => {
@@ -70,174 +346,121 @@ impl PhotoHashIndex {
             }
         }
 
+        // Collect all files to index
         info!(
-            "Building duplicate detection index from {} folder(s)...",
+            "Scanning {} folder(s) for files...",
             config.comparison_folders.len()
         );
 
-        // Store hash_size for use in parallel closures
-        let hash_size = config.hash_size;
-
-        // First pass: count total files to process
-        info!("Counting files to index...");
-        let mut file_list: Vec<PathBuf> = Vec::new();
-
-        for folder in &config.comparison_folders {
-            if !folder.exists() {
-                warn!("Comparison folder does not exist: {}", folder.display());
-                continue;
-            }
-
-            for entry in WalkDir::new(folder)
-                .follow_links(true)
-                .into_iter()
-                .filter_map(|e| e.ok())
-            {
-                let path = entry.path();
-
-                if !path.is_file() {
-                    continue;
-                }
-
-                // Check extension
-                let ext = path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .map(|e| e.to_lowercase())
-                    .unwrap_or_default();
-
-                if SUPPORTED_EXTENSIONS.contains(&ext.as_str()) {
-                    file_list.push(path.to_path_buf());
-                }
-            }
-        }
-
+        let file_list = index.collect_files(&config.comparison_folders)?;
         let total_files = file_list.len();
-        info!("Found {} image files to index", total_files);
 
-        // Set up progress bar
-        let progress = ProgressBar::new(total_files as u64);
-        progress.set_style(
-            ProgressStyle::default_bar()
-                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({percent}%) {msg}")
-                .expect("Invalid progress template")
-                .progress_chars("#>-"),
-        );
-        progress.set_message("Building hash index (multi-threaded)...");
-
-        // Build size map first (single-threaded, fast)
-        for path in &file_list {
-            if let Ok(metadata) = fs::metadata(path) {
-                let size = metadata.len();
-                index.size_map.entry(size).or_default().push(path.clone());
-            }
+        if total_files == 0 {
+            info!("No files found to index");
+            return Ok(index);
         }
 
-        // Use atomic counters for thread-safe progress tracking
-        let hashed_files = AtomicUsize::new(0);
-        let errors = AtomicUsize::new(0);
+        info!("Found {} files to index", total_files);
+
+        // Progress tracking
         let processed = AtomicUsize::new(0);
+        let hashed = AtomicUsize::new(0);
+        let errors = AtomicUsize::new(0);
 
-        // Compute hashes in parallel using rayon
-        if config.hash_algorithm == HashAlgorithm::Perceptual {
-            info!(
-                "Computing perceptual hashes using {} threads...",
-                rayon::current_num_threads()
-            );
+        // Parallel hash computation
+        let entries: Vec<Option<IndexEntry>> = file_list
+            .par_iter()
+            .map(|path| {
+                // Check for shutdown
+                if shutdown_flag.load(Ordering::Relaxed) {
+                    return None;
+                }
 
-            // Collect results in parallel - create hasher per thread
-            let hash_results: Vec<Option<(ImageHash, PathBuf)>> = file_list
-                .par_iter()
-                .map(|path| {
-                    // Check for shutdown
-                    if shutdown_flag.load(Ordering::Relaxed) {
+                let current = processed.fetch_add(1, Ordering::Relaxed);
+
+                // Report progress periodically
+                if current % 100 == 0 || current == total_files - 1 {
+                    progress_callback(IndexProgress {
+                        current,
+                        total: total_files,
+                        current_file: Some(path.clone()),
+                        hashed: hashed.load(Ordering::Relaxed),
+                        errors: errors.load(Ordering::Relaxed),
+                    });
+                }
+
+                // Get file metadata
+                let metadata = match fs::metadata(path) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        trace!("Failed to read metadata for {}: {}", path.display(), e);
+                        errors.fetch_add(1, Ordering::Relaxed);
                         return None;
                     }
+                };
 
-                    // Update progress
-                    let current = processed.fetch_add(1, Ordering::Relaxed);
-                    if current.is_multiple_of(10) {
-                        progress.set_position(current as u64);
+                let size = metadata.len();
+
+                // Apply size filters
+                if config.min_file_size > 0 && size < config.min_file_size {
+                    return None;
+                }
+                if config.max_file_size > 0 && size > config.max_file_size {
+                    return None;
+                }
+
+                // Compute hash
+                match compute_file_hash(path) {
+                    Ok(hash) => {
+                        hashed.fetch_add(1, Ordering::Relaxed);
+                        let indexed_at = SystemTime::now()
+                            .duration_since(SystemTime::UNIX_EPOCH)
+                            .map(|d| d.as_secs())
+                            .unwrap_or(0);
+
+                        Some(IndexEntry {
+                            path: path.clone(),
+                            size,
+                            hash,
+                            indexed_at,
+                        })
                     }
-
-                    // Create hasher for this thread
-                    let hasher = HasherConfig::new()
-                        .hash_size(hash_size, hash_size)
-                        .to_hasher();
-
-                    // Compute hash
-                    match load_image_for_hash(path) {
-                        Ok(img) => {
-                            let hash = hasher.hash_image(&img);
-                            trace!("Hashed: {} -> {}", path.display(), hash.to_base64());
-                            hashed_files.fetch_add(1, Ordering::Relaxed);
-                            Some((hash, path.clone()))
-                        }
-                        Err(e) => {
-                            trace!("Failed to hash {}: {}", path.display(), e);
-                            errors.fetch_add(1, Ordering::Relaxed);
-                            None
-                        }
-                    }
-                })
-                .collect();
-
-            // Collect successful hashes
-            for result in hash_results.into_iter().flatten() {
-                index.perceptual_hashes.push(result);
-            }
-        } else if config.hash_algorithm == HashAlgorithm::Exif {
-            // EXIF extraction in parallel
-            info!(
-                "Extracting EXIF data using {} threads...",
-                rayon::current_num_threads()
-            );
-
-            let exif_results: Vec<Option<(String, PathBuf)>> = file_list
-                .par_iter()
-                .map(|path| {
-                    if shutdown_flag.load(Ordering::Relaxed) {
-                        return None;
-                    }
-
-                    let current = processed.fetch_add(1, Ordering::Relaxed);
-                    if current.is_multiple_of(10) {
-                        progress.set_position(current as u64);
-                    }
-
-                    if let Some(key) = extract_exif_key(path) {
-                        hashed_files.fetch_add(1, Ordering::Relaxed);
-                        Some((key, path.clone()))
-                    } else {
+                    Err(e) => {
+                        trace!("Failed to hash {}: {}", path.display(), e);
                         errors.fetch_add(1, Ordering::Relaxed);
                         None
                     }
-                })
-                .collect();
+                }
+            })
+            .collect();
 
-            for result in exif_results.into_iter().flatten() {
-                index.exif_keys.insert(result.0, result.1);
-            }
-        }
-
-        progress.set_position(total_files as u64);
-
+        // Check if we were interrupted
         if shutdown_flag.load(Ordering::SeqCst) {
-            progress.finish_with_message("Index build interrupted!");
-        } else {
-            progress.finish_with_message("Index complete!");
+            info!("Index building interrupted");
+            return Ok(index);
         }
 
-        let hashed_files = hashed_files.load(Ordering::Relaxed);
-        let errors = errors.load(Ordering::Relaxed);
+        // Build the index from successful entries
+        for entry in entries.into_iter().flatten() {
+            index.add_entry(entry);
+        }
+
+        // Update statistics
+        index.stats.errors = errors.load(Ordering::Relaxed);
+        index.stats.build_time_ms = start_time.elapsed().as_millis() as u64;
+        index.compute_stats();
 
         info!(
-            "Index built: {} files processed, {} hashed, {} errors",
-            total_files, hashed_files, errors
+            "Index built: {} files, {} unique hashes, {} duplicate groups, {} errors in {}ms",
+            index.stats.total_files,
+            index.stats.unique_hashes,
+            index.stats.duplicate_groups,
+            index.stats.errors,
+            index.stats.build_time_ms
         );
 
         // Save cache
-        if config.cache_index {
+        if config.cache_enabled {
             if let Err(e) = index.save_cache(&config.cache_file) {
                 warn!("Failed to save cache: {}", e);
             } else {
@@ -248,295 +471,386 @@ impl PhotoHashIndex {
         Ok(index)
     }
 
-    /// Check if a photo (from device, in memory) is a duplicate
-    pub fn is_duplicate(&self, image_data: &[u8]) -> Option<PathBuf> {
-        match self.config.hash_algorithm {
-            HashAlgorithm::Perceptual => self.check_perceptual_hash(image_data),
-            HashAlgorithm::Exif => self.check_exif(image_data),
-            HashAlgorithm::Size => self.check_size(image_data.len() as u64),
+    /// Collect all files from the given folders
+    fn collect_files(&self, folders: &[PathBuf]) -> Result<Vec<PathBuf>> {
+        let mut files = Vec::new();
+
+        for folder in folders {
+            if !folder.exists() {
+                warn!("Folder does not exist: {}", folder.display());
+                continue;
+            }
+
+            let walker = WalkDir::new(folder)
+                .follow_links(self.config.follow_symlinks)
+                .max_depth(if self.config.recursive { usize::MAX } else { 1 });
+
+            for entry in walker.into_iter().filter_map(|e| e.ok()) {
+                let path = entry.path();
+
+                if !path.is_file() {
+                    continue;
+                }
+
+                // Check extension if media_only is enabled
+                if self.config.media_only {
+                    let ext = path
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .map(|e| e.to_lowercase())
+                        .unwrap_or_default();
+
+                    if !MEDIA_EXTENSIONS.contains(&ext.as_str()) {
+                        continue;
+                    }
+                }
+
+                files.push(path.to_path_buf());
+            }
         }
+
+        Ok(files)
     }
 
-    /// Check using perceptual hash
-    fn check_perceptual_hash(&self, image_data: &[u8]) -> Option<PathBuf> {
-        // Try to decode the image
-        let img = match load_image_from_memory(image_data) {
-            Ok(img) => img,
-            Err(e) => {
-                trace!("Failed to decode image for hashing: {}", e);
-                return None;
+    /// Add an entry to the index
+    fn add_entry(&mut self, entry: IndexEntry) {
+        let idx = self.entries.len();
+        let size = entry.size;
+        let hash = entry.hash;
+
+        self.entries.push(entry);
+
+        // Update size index
+        self.size_index.entry(size).or_default().push(idx);
+
+        // Update hash index
+        self.hash_index.entry(hash).or_default().push(idx);
+    }
+
+    /// Compute statistics about the index
+    fn compute_stats(&mut self) {
+        self.stats.total_files = self.entries.len();
+        self.stats.total_bytes = self.entries.iter().map(|e| e.size).sum();
+        self.stats.unique_hashes = self.hash_index.len();
+
+        // Count duplicate groups (hashes with more than one file)
+        let mut dup_groups = 0;
+        let mut dup_files = 0;
+        for indices in self.hash_index.values() {
+            if indices.len() > 1 {
+                dup_groups += 1;
+                dup_files += indices.len() - 1; // All but one are duplicates
             }
+        }
+        self.stats.duplicate_groups = dup_groups;
+        self.stats.duplicate_files = dup_files;
+    }
+
+    /// Check if the given data is a duplicate of an indexed file
+    ///
+    /// Uses size pre-filtering for efficiency: if no indexed file has
+    /// the same size, we skip hash computation entirely.
+    ///
+    /// # Arguments
+    /// * `data` - The file data to check
+    ///
+    /// # Returns
+    /// * `Some(path)` - Path to the original file if this is a duplicate
+    /// * `None` - If this is not a duplicate
+    #[allow(dead_code)]
+    pub fn find_duplicate(&self, data: &[u8]) -> Option<&Path> {
+        let size = data.len() as u64;
+
+        // First check: do we have any files with this size?
+        let size_matches = self.size_index.get(&size)?;
+
+        if size_matches.is_empty() {
+            return None;
+        }
+
+        // Compute hash of the input data
+        let hash = compute_data_hash(data);
+
+        // Look up in hash index
+        self.find_duplicate_by_hash(&hash)
+    }
+
+    /// Check if data with a known size is a duplicate
+    ///
+    /// This is slightly more efficient than `find_duplicate` when you
+    /// already know the size (avoids computing data.len()).
+    pub fn find_duplicate_with_size(&self, data: &[u8], size: u64) -> Option<&Path> {
+        // First check: do we have any files with this size?
+        let size_matches = self.size_index.get(&size)?;
+
+        if size_matches.is_empty() {
+            return None;
+        }
+
+        // Compute hash of the input data
+        let hash = compute_data_hash(data);
+
+        // Look up in hash index
+        self.find_duplicate_by_hash(&hash)
+    }
+
+    /// Find a duplicate by its pre-computed hash
+    pub fn find_duplicate_by_hash(&self, hash: &Sha256Hash) -> Option<&Path> {
+        let indices = self.hash_index.get(hash)?;
+        let first_idx = indices.first()?;
+        Some(&self.entries[*first_idx].path)
+    }
+
+    /// Check if a file on disk is a duplicate
+    #[allow(dead_code)]
+    pub fn is_file_duplicate(&self, path: &Path) -> Result<Option<&Path>> {
+        // Get file size first for pre-filtering
+        let metadata = fs::metadata(path).map_err(|e| {
+            ExtractionError::IoError(format!("Failed to read file metadata: {}", e))
+        })?;
+
+        let size = metadata.len();
+
+        // Check if any indexed file has this size
+        if !self.size_index.contains_key(&size) {
+            return Ok(None);
+        }
+
+        // Compute hash and look up
+        let hash = compute_file_hash(path)?;
+        Ok(self.find_duplicate_by_hash(&hash))
+    }
+
+    /// Find all duplicate groups within the index itself
+    #[allow(dead_code)]
+    pub fn find_internal_duplicates(&self) -> Vec<DuplicateGroup> {
+        let mut groups = Vec::new();
+
+        for (hash, indices) in &self.hash_index {
+            if indices.len() > 1 {
+                let paths: Vec<PathBuf> = indices
+                    .iter()
+                    .map(|&idx| self.entries[idx].path.clone())
+                    .collect();
+
+                let size = self.entries[indices[0]].size;
+
+                groups.push(DuplicateGroup {
+                    hash: *hash,
+                    size,
+                    paths,
+                });
+            }
+        }
+
+        groups
+    }
+
+    /// Get all entries in the index
+    #[allow(dead_code)]
+    pub fn entries(&self) -> &[IndexEntry] {
+        &self.entries
+    }
+
+    /// Get statistics about the index
+    pub fn stats(&self) -> &IndexStats {
+        &self.stats
+    }
+
+    /// Get the number of indexed files
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Check if the index is empty
+    #[allow(dead_code)]
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Remove entries for files that no longer exist on disk
+    #[allow(dead_code)]
+    pub fn prune_missing(&mut self) -> usize {
+        let original_count = self.entries.len();
+
+        // Find indices of entries that still exist
+        let existing: Vec<IndexEntry> =
+            self.entries.drain(..).filter(|e| e.path.exists()).collect();
+
+        // Rebuild indices
+        self.size_index.clear();
+        self.hash_index.clear();
+
+        for entry in existing {
+            self.add_entry(entry);
+        }
+
+        self.compute_stats();
+
+        original_count - self.entries.len()
+    }
+
+    /// Merge another index into this one
+    #[allow(dead_code)]
+    pub fn merge(&mut self, other: DuplicateIndex) {
+        for entry in other.entries {
+            // Avoid adding duplicates
+            if !self.hash_index.contains_key(&entry.hash) {
+                self.add_entry(entry);
+            }
+        }
+        self.compute_stats();
+    }
+
+    /// Save the index to a cache file
+    pub fn save_cache(&self, path: &Path) -> Result<()> {
+        let cache = IndexCache {
+            version: IndexCache::CURRENT_VERSION,
+            created_at: SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+            config_hash: self.compute_config_hash(),
+            entries: self.entries.clone(),
         };
 
-        let hasher = HasherConfig::new()
-            .hash_size(self.hash_size, self.hash_size)
-            .to_hasher();
+        let json = serde_json::to_string_pretty(&cache)
+            .map_err(|e| ExtractionError::IoError(format!("Failed to serialize cache: {}", e)))?;
 
-        let hash = hasher.hash_image(&img);
-        trace!("Image hash: {}", hash.to_base64());
-
-        // Find closest match
-        for (existing_hash, path) in &self.perceptual_hashes {
-            let distance = hash.dist(existing_hash);
-            if distance <= self.config.similarity_threshold {
-                debug!(
-                    "Found duplicate (distance: {}): {}",
-                    distance,
-                    path.display()
-                );
-                return Some(path.clone());
-            }
+        // Ensure parent directory exists
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|e| {
+                ExtractionError::IoError(format!("Failed to create cache directory: {}", e))
+            })?;
         }
 
-        None
-    }
-
-    /// Check using EXIF metadata
-    fn check_exif(&self, image_data: &[u8]) -> Option<PathBuf> {
-        let key = extract_exif_key_from_bytes(image_data)?;
-        self.exif_keys.get(&key).cloned()
-    }
-
-    /// Check using file size
-    fn check_size(&self, size: u64) -> Option<PathBuf> {
-        self.size_map
-            .get(&size)
-            .and_then(|paths| paths.first().cloned())
-    }
-
-    /// Save index to cache file
-    fn save_cache(&self, path: &Path) -> Result<()> {
-        let file = File::create(path)
-            .map_err(|e| ExtractionError::IoError(format!("Failed to create cache file: {}", e)))?;
-        let mut writer = BufWriter::new(file);
-
-        // Write version
-        writer
-            .write_all(&[1u8])
-            .map_err(|e| ExtractionError::IoError(format!("Failed to write cache: {}", e)))?;
-
-        // Write hash size
-        writer
-            .write_all(&self.hash_size.to_le_bytes())
-            .map_err(|e| ExtractionError::IoError(format!("Failed to write cache: {}", e)))?;
-
-        // Write number of entries
-        let count = self.perceptual_hashes.len() as u32;
-        writer
-            .write_all(&count.to_le_bytes())
-            .map_err(|e| ExtractionError::IoError(format!("Failed to write cache: {}", e)))?;
-
-        // Write each entry
-        for (hash, path) in &self.perceptual_hashes {
-            // Write hash bytes
-            let hash_bytes = hash.as_bytes();
-            let hash_len = hash_bytes.len() as u32;
-            writer
-                .write_all(&hash_len.to_le_bytes())
-                .map_err(|e| ExtractionError::IoError(format!("Failed to write cache: {}", e)))?;
-            writer
-                .write_all(hash_bytes)
-                .map_err(|e| ExtractionError::IoError(format!("Failed to write cache: {}", e)))?;
-
-            // Write path
-            let path_str = path.to_string_lossy();
-            let path_bytes = path_str.as_bytes();
-            let path_len = path_bytes.len() as u32;
-            writer
-                .write_all(&path_len.to_le_bytes())
-                .map_err(|e| ExtractionError::IoError(format!("Failed to write cache: {}", e)))?;
-            writer
-                .write_all(path_bytes)
-                .map_err(|e| ExtractionError::IoError(format!("Failed to write cache: {}", e)))?;
-        }
-
-        writer
-            .flush()
-            .map_err(|e| ExtractionError::IoError(format!("Failed to flush cache: {}", e)))?;
+        fs::write(path, json)
+            .map_err(|e| ExtractionError::IoError(format!("Failed to write cache file: {}", e)))?;
 
         Ok(())
     }
 
-    /// Load index from cache file
+    /// Load the index from a cache file
     fn load_cache(&mut self, path: &Path) -> Result<()> {
-        let file = File::open(path)
-            .map_err(|e| ExtractionError::IoError(format!("Failed to open cache file: {}", e)))?;
-        let mut reader = BufReader::new(file);
+        let json = fs::read_to_string(path)
+            .map_err(|e| ExtractionError::IoError(format!("Failed to read cache file: {}", e)))?;
 
-        // Read version
-        let mut version = [0u8; 1];
-        reader
-            .read_exact(&mut version)
-            .map_err(|e| ExtractionError::IoError(format!("Failed to read cache: {}", e)))?;
+        let cache: IndexCache = serde_json::from_str(&json)
+            .map_err(|e| ExtractionError::IoError(format!("Failed to parse cache: {}", e)))?;
 
-        if version[0] != 1 {
-            return Err(ExtractionError::IoError(
-                "Invalid cache version".to_string(),
-            ));
-        }
-
-        // Read hash size
-        let mut hash_size_bytes = [0u8; 4];
-        reader
-            .read_exact(&mut hash_size_bytes)
-            .map_err(|e| ExtractionError::IoError(format!("Failed to read cache: {}", e)))?;
-        let cached_hash_size = u32::from_le_bytes(hash_size_bytes);
-
-        if cached_hash_size != self.hash_size {
+        // Check version
+        if cache.version != IndexCache::CURRENT_VERSION {
             return Err(ExtractionError::IoError(format!(
-                "Cache hash size mismatch: {} vs {}",
-                cached_hash_size, self.hash_size
+                "Cache version mismatch: expected {}, got {}",
+                IndexCache::CURRENT_VERSION,
+                cache.version
             )));
         }
 
-        // Read number of entries
-        let mut count_bytes = [0u8; 4];
-        reader
-            .read_exact(&mut count_bytes)
-            .map_err(|e| ExtractionError::IoError(format!("Failed to read cache: {}", e)))?;
-        let count = u32::from_le_bytes(count_bytes);
-
-        // Read each entry
-        for _ in 0..count {
-            // Read hash
-            let mut hash_len_bytes = [0u8; 4];
-            reader
-                .read_exact(&mut hash_len_bytes)
-                .map_err(|e| ExtractionError::IoError(format!("Failed to read cache: {}", e)))?;
-            let hash_len = u32::from_le_bytes(hash_len_bytes) as usize;
-
-            let mut hash_bytes = vec![0u8; hash_len];
-            reader
-                .read_exact(&mut hash_bytes)
-                .map_err(|e| ExtractionError::IoError(format!("Failed to read cache: {}", e)))?;
-
-            // Read path
-            let mut path_len_bytes = [0u8; 4];
-            reader
-                .read_exact(&mut path_len_bytes)
-                .map_err(|e| ExtractionError::IoError(format!("Failed to read cache: {}", e)))?;
-            let path_len = u32::from_le_bytes(path_len_bytes) as usize;
-
-            let mut path_bytes = vec![0u8; path_len];
-            reader
-                .read_exact(&mut path_bytes)
-                .map_err(|e| ExtractionError::IoError(format!("Failed to read cache: {}", e)))?;
-
-            let path_str = String::from_utf8_lossy(&path_bytes);
-            let path = PathBuf::from(path_str.as_ref());
-
-            // Reconstruct hash
-            if let Ok(hash) = ImageHash::from_bytes(&hash_bytes) {
-                self.perceptual_hashes.push((hash, path));
-            }
+        // Check if config matches (comparison folders changed)
+        let current_config_hash = self.compute_config_hash();
+        if cache.config_hash != current_config_hash {
+            return Err(ExtractionError::IoError(
+                "Cache config mismatch (folders changed)".to_string(),
+            ));
         }
+
+        // Load entries
+        for entry in cache.entries {
+            self.add_entry(entry);
+        }
+
+        self.compute_stats();
 
         Ok(())
     }
 
-    /// Get the number of indexed photos
-    pub fn len(&self) -> usize {
-        match self.config.hash_algorithm {
-            HashAlgorithm::Perceptual => self.perceptual_hashes.len(),
-            HashAlgorithm::Exif => self.exif_keys.len(),
-            HashAlgorithm::Size => self.size_map.values().map(|v| v.len()).sum(),
+    /// Compute a hash of the configuration for cache validation
+    fn compute_config_hash(&self) -> String {
+        let mut hasher = Sha256::new();
+
+        // Include sorted folder paths
+        let mut folders: Vec<_> = self
+            .config
+            .comparison_folders
+            .iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect();
+        folders.sort();
+
+        for folder in folders {
+            hasher.update(folder.as_bytes());
+            hasher.update(b"|");
         }
+
+        // Include relevant config options
+        hasher.update(if self.config.recursive { b"r" } else { b"n" });
+        hasher.update(if self.config.media_only { b"m" } else { b"a" });
+
+        let result = hasher.finalize();
+        result.iter().map(|b| format!("{:02x}", b)).collect()
+    }
+}
+
+/// Compute SHA256 hash of a file using streaming (memory-efficient)
+pub fn compute_file_hash(path: &Path) -> Result<Sha256Hash> {
+    let file = File::open(path)
+        .map_err(|e| ExtractionError::IoError(format!("Failed to open file: {}", e)))?;
+
+    let mut reader = BufReader::with_capacity(HASH_BUFFER_SIZE, file);
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; HASH_BUFFER_SIZE];
+
+    loop {
+        let bytes_read = reader
+            .read(&mut buffer)
+            .map_err(|e| ExtractionError::IoError(format!("Failed to read file: {}", e)))?;
+
+        if bytes_read == 0 {
+            break;
+        }
+
+        hasher.update(&buffer[..bytes_read]);
     }
 
-    /// Check if the index contains no entries
-    #[allow(dead_code)]
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
+    let result = hasher.finalize();
+    let mut hash = [0u8; 32];
+    hash.copy_from_slice(&result);
+
+    Ok(hash)
 }
 
-/// Extract EXIF key from file path
-fn extract_exif_key(path: &Path) -> Option<String> {
-    let file = File::open(path).ok()?;
-    let mut bufreader = BufReader::new(&file);
-    let exifreader = exif::Reader::new();
-    let exif = exifreader.read_from_container(&mut bufreader).ok()?;
+/// Compute SHA256 hash of in-memory data
+pub fn compute_data_hash(data: &[u8]) -> Sha256Hash {
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    let result = hasher.finalize();
 
-    extract_exif_key_from_exif(&exif)
+    let mut hash = [0u8; 32];
+    hash.copy_from_slice(&result);
+    hash
 }
 
-/// Extract EXIF key from raw image bytes
-fn extract_exif_key_from_bytes(data: &[u8]) -> Option<String> {
-    let mut cursor = std::io::Cursor::new(data);
-    let exifreader = exif::Reader::new();
-    let exif = exifreader.read_from_container(&mut cursor).ok()?;
-
-    extract_exif_key_from_exif(&exif)
+/// Convert a hash to a hexadecimal string
+#[allow(dead_code)]
+pub fn hash_to_hex(hash: &Sha256Hash) -> String {
+    hash.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
-/// Load an image from a file path for hashing
-/// Uses the image crate to load, then converts to img_hash's expected format
-fn load_image_for_hash(path: &Path) -> std::result::Result<img_hash::image::DynamicImage, String> {
-    // Load using the image crate (which has jpeg support)
-    let img = image::open(path).map_err(|e| e.to_string())?;
-
-    // Convert to RGB8 and then to img_hash's DynamicImage format
-    let rgb_img = img.to_rgb8();
-    let (width, height) = rgb_img.dimensions();
-
-    // Create an img_hash compatible image
-    let img_hash_img = img_hash::image::RgbImage::from_raw(width, height, rgb_img.into_raw())
-        .ok_or_else(|| "Failed to create image buffer".to_string())?;
-
-    Ok(img_hash::image::DynamicImage::ImageRgb8(img_hash_img))
-}
-
-/// Load an image from memory for hashing
-/// Uses the image crate to load, then converts to img_hash's expected format
-fn load_image_from_memory(
-    data: &[u8],
-) -> std::result::Result<img_hash::image::DynamicImage, String> {
-    // Load using the image crate (which has jpeg support)
-    let img = image::load_from_memory(data).map_err(|e| e.to_string())?;
-
-    // Convert to RGB8 and then to img_hash's DynamicImage format
-    let rgb_img = img.to_rgb8();
-    let (width, height) = rgb_img.dimensions();
-
-    // Create an img_hash compatible image
-    let img_hash_img = img_hash::image::RgbImage::from_raw(width, height, rgb_img.into_raw())
-        .ok_or_else(|| "Failed to create image buffer".to_string())?;
-
-    Ok(img_hash::image::DynamicImage::ImageRgb8(img_hash_img))
-}
-
-/// Extract EXIF key from parsed EXIF data
-fn extract_exif_key_from_exif(exif: &exif::Exif) -> Option<String> {
-    // Get date/time original
-    let datetime = exif
-        .get_field(exif::Tag::DateTimeOriginal, exif::In::PRIMARY)
-        .map(|f| f.display_value().to_string())
-        .unwrap_or_default();
-
-    // Get dimensions
-    let width = exif
-        .get_field(exif::Tag::PixelXDimension, exif::In::PRIMARY)
-        .or_else(|| exif.get_field(exif::Tag::ImageWidth, exif::In::PRIMARY))
-        .map(|f| f.display_value().to_string())
-        .unwrap_or_default();
-
-    let height = exif
-        .get_field(exif::Tag::PixelYDimension, exif::In::PRIMARY)
-        .or_else(|| exif.get_field(exif::Tag::ImageLength, exif::In::PRIMARY))
-        .map(|f| f.display_value().to_string())
-        .unwrap_or_default();
-
-    // Get camera make/model
-    let make = exif
-        .get_field(exif::Tag::Make, exif::In::PRIMARY)
-        .map(|f| f.display_value().to_string())
-        .unwrap_or_default();
-
-    if datetime.is_empty() && width.is_empty() {
+/// Parse a hexadecimal string to a hash
+#[allow(dead_code)]
+pub fn hex_to_hash(hex: &str) -> Option<Sha256Hash> {
+    if hex.len() != 64 {
         return None;
     }
 
-    Some(format!("{}|{}x{}|{}", datetime, width, height, make))
+    let mut hash = [0u8; 32];
+    for (i, chunk) in hex.as_bytes().chunks(2).enumerate() {
+        let hex_str = std::str::from_utf8(chunk).ok()?;
+        hash[i] = u8::from_str_radix(hex_str, 16).ok()?;
+    }
+
+    Some(hash)
 }
 
 #[cfg(test)]
@@ -544,9 +858,278 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_index_creation() {
-        let config = DuplicateDetectionConfig::default();
-        let index = PhotoHashIndex::new(&config);
+    fn test_config_builder() {
+        let config = DuplicateConfig::new()
+            .with_folder(PathBuf::from("/photos"))
+            .with_folder(PathBuf::from("/backup"))
+            .with_cache_file(PathBuf::from("./cache.json"))
+            .with_recursive(true)
+            .with_media_only(false);
+
+        assert_eq!(config.comparison_folders.len(), 2);
+        assert_eq!(config.cache_file, PathBuf::from("./cache.json"));
+        assert!(config.recursive);
+        assert!(!config.media_only);
+    }
+
+    #[test]
+    fn test_config_defaults() {
+        let config = DuplicateConfig::default();
+
+        assert!(config.comparison_folders.is_empty());
+        assert!(config.cache_enabled);
+        assert!(config.recursive);
+        assert!(config.media_only);
+        assert_eq!(config.min_file_size, 0);
+        assert_eq!(config.max_file_size, 0);
+    }
+
+    #[test]
+    fn test_empty_index() {
+        let config = DuplicateConfig::new();
+        let index = DuplicateIndex::new(config);
+
         assert!(index.is_empty());
+        assert_eq!(index.len(), 0);
+        assert_eq!(index.stats().total_files, 0);
+    }
+
+    #[test]
+    fn test_compute_data_hash() {
+        let data = b"Hello, World!";
+        let hash = compute_data_hash(data);
+
+        // Known SHA256 hash of "Hello, World!"
+        let expected = "dffd6021bb2bd5b0af676290809ec3a53191dd81c7f70a4b28688a362182986f";
+        assert_eq!(hash_to_hex(&hash), expected);
+    }
+
+    #[test]
+    fn test_hash_consistency() {
+        let data = b"test data for hashing";
+
+        let hash1 = compute_data_hash(data);
+        let hash2 = compute_data_hash(data);
+
+        assert_eq!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_different_data_different_hash() {
+        let data1 = b"first file content";
+        let data2 = b"second file content";
+
+        let hash1 = compute_data_hash(data1);
+        let hash2 = compute_data_hash(data2);
+
+        assert_ne!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_hash_to_hex_and_back() {
+        let original_hash = compute_data_hash(b"test");
+        let hex = hash_to_hex(&original_hash);
+        let parsed_hash = hex_to_hash(&hex).unwrap();
+
+        assert_eq!(original_hash, parsed_hash);
+    }
+
+    #[test]
+    fn test_hex_to_hash_invalid() {
+        assert!(hex_to_hash("too_short").is_none());
+        assert!(
+            hex_to_hash("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn test_index_find_duplicate() {
+        let config = DuplicateConfig::new();
+        let mut index = DuplicateIndex::new(config);
+
+        // Add an entry manually
+        let data = b"duplicate content";
+        let hash = compute_data_hash(data);
+        let entry = IndexEntry {
+            path: PathBuf::from("/photos/original.jpg"),
+            size: data.len() as u64,
+            hash,
+            indexed_at: 0,
+        };
+        index.add_entry(entry);
+        index.compute_stats();
+
+        // Should find duplicate
+        let dup = index.find_duplicate(data);
+        assert!(dup.is_some());
+        assert_eq!(dup.unwrap(), Path::new("/photos/original.jpg"));
+
+        // Should not find non-duplicate
+        let other_data = b"different content";
+        assert!(index.find_duplicate(other_data).is_none());
+    }
+
+    #[test]
+    fn test_index_size_filtering() {
+        let config = DuplicateConfig::new();
+        let mut index = DuplicateIndex::new(config);
+
+        // Add an entry
+        let data = b"original";
+        let hash = compute_data_hash(data);
+        let entry = IndexEntry {
+            path: PathBuf::from("/photos/original.jpg"),
+            size: data.len() as u64,
+            hash,
+            indexed_at: 0,
+        };
+        index.add_entry(entry);
+
+        // Data with different size should return None without computing hash
+        let different_size_data = b"this is much longer content that has different size";
+        assert!(index.find_duplicate(different_size_data).is_none());
+    }
+
+    #[test]
+    fn test_find_internal_duplicates() {
+        let config = DuplicateConfig::new();
+        let mut index = DuplicateIndex::new(config);
+
+        let data = b"shared content";
+        let hash = compute_data_hash(data);
+
+        // Add multiple entries with same hash
+        for i in 0..3 {
+            let entry = IndexEntry {
+                path: PathBuf::from(format!("/photos/file{}.jpg", i)),
+                size: data.len() as u64,
+                hash,
+                indexed_at: 0,
+            };
+            index.add_entry(entry);
+        }
+
+        index.compute_stats();
+
+        let groups = index.find_internal_duplicates();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].paths.len(), 3);
+    }
+
+    #[test]
+    fn test_index_stats() {
+        let config = DuplicateConfig::new();
+        let mut index = DuplicateIndex::new(config);
+
+        // Add some entries
+        for i in 0..5 {
+            let data = format!("file content {}", i);
+            let hash = compute_data_hash(data.as_bytes());
+            let entry = IndexEntry {
+                path: PathBuf::from(format!("/photos/file{}.jpg", i)),
+                size: data.len() as u64,
+                hash,
+                indexed_at: 0,
+            };
+            index.add_entry(entry);
+        }
+
+        // Add a duplicate
+        let dup_data = "file content 0";
+        let dup_hash = compute_data_hash(dup_data.as_bytes());
+        let dup_entry = IndexEntry {
+            path: PathBuf::from("/photos/duplicate.jpg"),
+            size: dup_data.len() as u64,
+            hash: dup_hash,
+            indexed_at: 0,
+        };
+        index.add_entry(dup_entry);
+
+        index.compute_stats();
+
+        assert_eq!(index.stats().total_files, 6);
+        assert_eq!(index.stats().unique_hashes, 5);
+        assert_eq!(index.stats().duplicate_groups, 1);
+        assert_eq!(index.stats().duplicate_files, 1);
+    }
+
+    #[test]
+    fn test_index_merge() {
+        let config = DuplicateConfig::new();
+        let mut index1 = DuplicateIndex::new(config.clone());
+        let mut index2 = DuplicateIndex::new(config);
+
+        // Add entries to first index
+        let data1 = b"content 1";
+        let entry1 = IndexEntry {
+            path: PathBuf::from("/photos/file1.jpg"),
+            size: data1.len() as u64,
+            hash: compute_data_hash(data1),
+            indexed_at: 0,
+        };
+        index1.add_entry(entry1);
+
+        // Add entries to second index
+        let data2 = b"content 2";
+        let entry2 = IndexEntry {
+            path: PathBuf::from("/photos/file2.jpg"),
+            size: data2.len() as u64,
+            hash: compute_data_hash(data2),
+            indexed_at: 0,
+        };
+        index2.add_entry(entry2);
+
+        // Merge
+        index1.merge(index2);
+
+        assert_eq!(index1.len(), 2);
+        assert!(index1.find_duplicate(data1).is_some());
+        assert!(index1.find_duplicate(data2).is_some());
+    }
+
+    #[test]
+    fn test_index_entry_serialization() {
+        let data = b"test content";
+        let entry = IndexEntry {
+            path: PathBuf::from("/photos/test.jpg"),
+            size: data.len() as u64,
+            hash: compute_data_hash(data),
+            indexed_at: 1234567890,
+        };
+
+        let json = serde_json::to_string(&entry).unwrap();
+        let deserialized: IndexEntry = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(entry.path, deserialized.path);
+        assert_eq!(entry.size, deserialized.size);
+        assert_eq!(entry.hash, deserialized.hash);
+        assert_eq!(entry.indexed_at, deserialized.indexed_at);
+    }
+
+    #[test]
+    fn test_media_extensions() {
+        // Verify common extensions are included
+        assert!(MEDIA_EXTENSIONS.contains(&"jpg"));
+        assert!(MEDIA_EXTENSIONS.contains(&"jpeg"));
+        assert!(MEDIA_EXTENSIONS.contains(&"png"));
+        assert!(MEDIA_EXTENSIONS.contains(&"heic"));
+        assert!(MEDIA_EXTENSIONS.contains(&"mp4"));
+        assert!(MEDIA_EXTENSIONS.contains(&"mov"));
+
+        // Verify non-media extensions are not included
+        assert!(!MEDIA_EXTENSIONS.contains(&"txt"));
+        assert!(!MEDIA_EXTENSIONS.contains(&"doc"));
+        assert!(!MEDIA_EXTENSIONS.contains(&"exe"));
+    }
+
+    #[test]
+    fn test_duplicate_config_with_size_limits() {
+        let config = DuplicateConfig::new()
+            .with_min_size(1024)
+            .with_max_size(10 * 1024 * 1024);
+
+        assert_eq!(config.min_file_size, 1024);
+        assert_eq!(config.max_file_size, 10 * 1024 * 1024);
     }
 }

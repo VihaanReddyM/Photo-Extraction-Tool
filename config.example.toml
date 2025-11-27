@@ -141,59 +141,50 @@ log_file = "./photo_extraction.log"
 # ┌──────────────────────────────────────────────────────────────────────────────┐
 # │                       🔍 DUPLICATE DETECTION SETTINGS                        │
 # └──────────────────────────────────────────────────────────────────────────────┘
-# This feature compares photos from your device against existing photos on your
-# computer to avoid extracting duplicates. Useful for consolidating photo libraries.
+# This feature uses SHA256 cryptographic hashing to detect exact duplicate files.
+# It compares files from your device against existing files on your computer,
+# avoiding extraction of files you already have. Works with ALL file types
+# (photos AND videos).
 
 [duplicate_detection]
 
 # Enable duplicate detection.
-# When enabled, the tool will skip photos that already exist in comparison_folders.
+# When enabled, the tool will skip files that already exist in comparison_folders.
 enabled = false
 
-# Folders to scan for existing photos to compare against.
-# The tool will hash all images in these folders to build a comparison database.
+# Folders to scan for existing files to compare against.
+# The tool will compute SHA256 hashes of all media files in these folders.
 # Use absolute paths for reliability.
 # Examples:
 #   comparison_folders = ["D:/Photos", "D:/Backup/Old iPhone"]
 #   comparison_folders = ["C:/Users/John/Pictures", "E:/Photo Archive"]
 comparison_folders = []
 
-# Hash algorithm for comparing photos. Options:
-#   "perceptual"  - Visual similarity comparison (recommended)
-#                   Works even if photos are resized or re-encoded
-#   "exif"        - Compare by metadata (date taken, dimensions)
-#                   Fast but may miss duplicates with different metadata
-#   "size"        - Compare by file size only
-#                   Very fast but least accurate
-hash_algorithm = "perceptual"
-
-# Hash size for perceptual hashing. Options: 8, 16, or 32
-# Larger values are more accurate but slower to compute.
-#   8   - Fast, good for most cases (recommended)
-#   16  - More accurate, moderate speed
-#   32  - Most accurate, slower
-hash_size = 8
-
-# Similarity threshold for perceptual hash matching.
-# This is the maximum Hamming distance between hashes to consider a match.
-#   0   - Exact match only
-#   5   - Similar images (recommended - catches resized/re-encoded photos)
-#   10+ - Loose matching (may produce false positives)
-similarity_threshold = 5
-
 # Cache the hash index for faster subsequent runs.
 # The first run will build the index (may take time for large libraries).
-# Subsequent runs will load from cache and only hash new files.
-cache_index = true
+# Subsequent runs will load from cache instantly.
+cache_enabled = true
 
-# Path to the cache file (stores hashed photo fingerprints).
-cache_file = "./photo_hash_cache.bin"
+# Path to the cache file (JSON format, human-readable).
+# This stores SHA256 hashes of your existing files for quick lookup.
+cache_file = "./.duplicate_cache.json"
 
 # Action to take when a duplicate is found. Options:
 #   "skip"      - Don't extract the duplicate (recommended)
 #   "overwrite" - Replace the existing file with the new one
-#   "rename"    - Keep both by adding a suffix to the new file
+#   "rename"    - Keep both by adding a suffix to the new file (e.g., IMG_001_1.jpg)
 duplicate_action = "skip"
+
+# Scan comparison folders recursively (include all subdirectories).
+# Set to `false` to only scan the top-level of each folder.
+recursive = true
+
+# Only index media files (photos and videos).
+# Set to `false` to index ALL files regardless of extension.
+# Supported media extensions: jpg, jpeg, png, gif, webp, bmp, tiff, tif, heic,
+#                             heif, raw, cr2, nef, arw, dng, mp4, mov, avi,
+#                             mkv, m4v, 3gp, wmv, flv, webm
+media_only = true
 
 
 # ┌──────────────────────────────────────────────────────────────────────────────┐
@@ -257,6 +248,7 @@ track_extracted_files = true
 # ║  4. Avoid duplicates:                                                        ║
 # ║     - Enable duplicate_detection.enabled = true                              ║
 # ║     - Add existing photo folders to comparison_folders                       ║
+# ║     - Or use CLI: --detect-duplicates --compare-to "D:/Photos"               ║
 # ║                                                                              ║
 # ║  5. Photos only (no videos):                                                 ║
 # ║     - Set extraction.include_videos = false                                  ║
