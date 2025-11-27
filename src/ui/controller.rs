@@ -1,8 +1,10 @@
 //! Extraction Controller Module
 //!
-//! Provides a thread-safe controller for managing extraction operations.
-//! This controller handles background extraction, cancellation, pause/resume,
-//! and communicates with the UI through channels.
+//! Provides a thread-safe controller for managing iOS device (iPhone/iPad) photo
+//! extraction operations. This controller handles background extraction, cancellation,
+//! pause/resume, and communicates with the UI through channels.
+//!
+//! No iTunes installation or additional drivers are required on Windows 10/11.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};

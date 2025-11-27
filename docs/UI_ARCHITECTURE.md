@@ -1,6 +1,8 @@
 # UI Architecture Documentation
 
-This document describes the UI support architecture for the Photo Extraction Tool. The `ui` module provides all the infrastructure needed for building graphical user interfaces, designed to be framework-agnostic and work with any Rust UI framework (egui, iced, Tauri, slint, etc.).
+This document describes the UI support architecture for the Photo Extraction Tool. The `ui` module provides all the infrastructure needed for building graphical user interfaces for iOS device (iPhone/iPad) photo extraction, designed to be framework-agnostic and work with any Rust UI framework (egui, iced, Tauri, slint, etc.).
+
+> **Note**: This tool uses the Windows Portable Devices (WPD) API. No iTunes installation or additional drivers are required on Windows 10/11.
 
 ## Overview
 
@@ -250,7 +252,7 @@ enum DeviceState {
 
 // Helper for user-friendly messages
 DeviceStateChecker::state_message(&DeviceState::Locked)
-// → "Device is locked. Please unlock your iPhone/iPad."
+// → "Device is locked. Please unlock your iOS device."
 
 DeviceStateChecker::state_icon(&DeviceState::Connected)
 // → "✅"

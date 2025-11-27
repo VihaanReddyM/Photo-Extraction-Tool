@@ -2,6 +2,7 @@
 //!
 //! A fast, reliable tool for extracting photos and videos from iOS devices
 //! (iPhone/iPad) on Windows using the Windows Portable Devices (WPD) API.
+//! No iTunes installation or additional drivers are required on Windows 10/11.
 //!
 //! This binary is a thin wrapper around the library, handling argument parsing,
 //! logging setup, and command dispatch.

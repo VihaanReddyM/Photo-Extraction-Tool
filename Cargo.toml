@@ -2,7 +2,7 @@
 name = "photo_extraction_tool"
 version = "1.0.0"
 edition = "2021"
-description = "A fast, reliable tool to extract photos from iPhone/iPad connected via USB on Windows"
+description = "A fast, reliable tool to extract photos from iOS devices (iPhone/iPad) on Windows — no iTunes or drivers required"
 authors = ["Vihaan Reddy M"]
 license = "MIT"
 readme = "README.md"

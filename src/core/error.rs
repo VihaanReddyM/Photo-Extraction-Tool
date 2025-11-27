@@ -38,7 +38,7 @@ pub enum ExtractionError {
     TransferError { filename: String, message: String },
 
     /// Access to the device was denied
-    #[error("Access denied. Please unlock your iPhone and tap 'Trust' when prompted.")]
+    #[error("Access denied. Please unlock your iOS device and tap 'Trust' when prompted.")]
     AccessDenied,
 
     /// Device is not ready for communication

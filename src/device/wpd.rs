@@ -1,10 +1,11 @@
-//! Device module for Windows Portable Device enumeration and management
+//! Device module for Windows Portable Devices (WPD) enumeration and management
 //!
-//! This module handles discovering connected iOS devices and managing
+//! This module handles discovering connected iOS devices (iPhone/iPad) and managing
 //! connections to them through the Windows Portable Devices API.
+//! No iTunes installation or additional drivers are required on Windows 10/11.
 //!
 //! It implements the device traits from `traits.rs` to enable testability
-//! by allowing mock devices to be substituted for real WPD devices.
+//! by allowing mock devices to be substituted for real iOS devices.
 
 use crate::core::error::{ExtractionError, Result};
 use crate::device::traits::{
@@ -619,9 +620,9 @@ impl DeviceContentTrait for DeviceContent {
 
             if objects.is_empty() && parent_id == "DEVICE" {
                 warn!("No objects found at root level. This might indicate:");
-                warn!("  - The device is locked");
-                warn!("  - The device hasn't been trusted");
-                warn!("  - iTunes/Apple Mobile Device Support is not installed");
+                warn!("  - The iOS device is locked — please unlock it");
+                warn!("  - You haven't tapped 'Trust' on the device");
+                warn!("  - Try a different USB cable or port");
             }
 
             Ok(objects)

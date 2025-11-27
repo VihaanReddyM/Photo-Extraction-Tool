@@ -1,7 +1,8 @@
 //! Device interaction module
 //!
-//! This module provides functionality for interacting with portable devices
+//! This module provides functionality for interacting with iOS devices (iPhone/iPad)
 //! connected to Windows via the Windows Portable Devices (WPD) API.
+//! No iTunes installation or additional drivers are required on Windows 10/11.
 //!
 //! # Submodules
 //!
@@ -11,7 +12,7 @@
 //!
 //! # Architecture
 //!
-//! The module uses a trait-based abstraction to enable testing without real devices:
+//! The module uses a trait-based abstraction to enable testing without real iOS devices:
 //!
 //! - `DeviceManagerTrait` - Enumerates and opens devices
 //! - `DeviceContentTrait` - Provides access to device file system
@@ -19,7 +20,8 @@
 //! - `DeviceObject` - Represents files and folders on a device
 //!
 //! Both the real WPD implementation and mock devices implement these traits,
-//! allowing the extraction pipeline to work with either.
+//! allowing the extraction pipeline to work with either real iOS devices or
+//! simulated test devices.
 
 #![allow(unused)]
 

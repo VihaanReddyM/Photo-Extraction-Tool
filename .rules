@@ -3,6 +3,42 @@
 # These rules define coding standards, architecture decisions, and best practices
 # for maintaining and extending this project.
 
+## Consistency Guidelines
+## ----------------------
+
+### Project Scope & Device Support
+- **Primary focus**: iOS devices (iPhone, iPad, iPod touch)
+- **Secondary support**: Other MTP-compatible devices (Android phones, cameras, etc.) via `apple_only = false`
+- The tool uses Windows Portable Devices (WPD) API which supports any MTP device
+- Always emphasize iOS as the primary use case, but acknowledge broader MTP support exists
+
+### Terminology Standards
+- Use "iOS devices (iPhone/iPad)" when describing the tool's main purpose
+- Use "Apple devices" when referring to the `apple_only` filter option
+- Use "MTP-compatible devices" when referring to the broader category (Android, cameras, etc.)
+- Use "Windows Portable Devices (WPD) API" when discussing the underlying technology
+- NEVER say "any phone" - use "iOS devices" or "MTP-compatible devices" as appropriate
+- NEVER use "iOS device" and "Apple device" interchangeably in the same context
+
+### Driver & Software Requirements
+- **No iTunes required**: The tool works without iTunes installation
+- **No additional drivers needed**: Windows 10/11 includes built-in MTP/USB drivers
+- When troubleshooting device access issues, mention:
+  1. Device must be unlocked
+  2. User must tap "Trust This Computer" on the device
+  3. Try a different USB cable or port
+- Do NOT mention "iTunes/Apple Mobile Device Support" in error messages - this is misleading
+
+### Platform Support
+- This is a **Windows-only** tool (requires WPD API)
+- Config file location examples may show Linux/macOS paths for completeness, but always note Windows is the only supported platform
+- Future cross-platform support is not guaranteed
+
+### Documentation Consistency
+- README.md is the primary source of truth for user-facing information
+- All help text, error messages, and doc comments should align with README terminology
+- When updating any user-facing text, ensure it matches the terminology standards above
+
 ## Code Style & Formatting
 ## -----------------------
 
@@ -223,6 +259,9 @@
 - Installation instructions
 - Basic usage examples
 - Configuration guide
+- Must use consistent terminology (see Consistency Guidelines above)
+- Primary device focus: iOS devices (iPhone/iPad)
+- Secondary: mention MTP support for other devices where appropriate
 
 ### Code Documentation
 - Module-level docs explaining purpose

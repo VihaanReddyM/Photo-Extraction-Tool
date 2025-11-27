@@ -5,12 +5,12 @@
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
-/// A fast, reliable tool to extract photos from iPhone/iPad on Windows
+/// A fast, reliable tool to extract photos from iOS devices (iPhone/iPad) on Windows
 #[derive(Parser, Debug)]
 #[command(name = "photo_extraction_tool")]
 #[command(author = "Vihaan Reddy M")]
 #[command(version = "1.0.0")]
-#[command(about = "Extract photos from iPhone/iPad connected to Windows PC", long_about = None)]
+#[command(about = "Extract photos from iOS devices (iPhone/iPad) on Windows — no iTunes or drivers required", long_about = None)]
 pub struct Args {
     #[command(subcommand)]
     pub command: Option<Commands>,
@@ -51,7 +51,7 @@ pub struct Args {
     #[arg(long, value_name = "ACTION", value_parser = ["skip", "rename", "overwrite"])]
     pub duplicate_action: Option<String>,
 
-    /// List all portable devices (not just Apple devices)
+    /// List all MTP-compatible devices (not just Apple/iOS devices)
     #[arg(long)]
     pub all_devices: bool,
 
@@ -79,7 +79,7 @@ pub enum Commands {
 
     /// List connected devices
     List {
-        /// Show all portable devices, not just Apple devices
+        /// Show all MTP-compatible devices, not just Apple/iOS devices
         #[arg(long)]
         all: bool,
     },
@@ -135,10 +135,10 @@ pub enum Commands {
         dcim_only: bool,
     },
 
-    /// Run tests using mock devices (no real device required)
+    /// Run tests using mock devices (no real iOS device required)
     ///
     /// This command allows you to test the photo extraction tool
-    /// without connecting a real phone to your PC. It uses simulated
+    /// without connecting a real iOS device to your PC. It uses simulated
     /// devices with various test scenarios.
     Test {
         #[command(subcommand)]

@@ -1,9 +1,11 @@
 //! UI Support Module
 //!
 //! This module provides all the infrastructure needed for building a graphical
-//! user interface for the Photo Extraction Tool. It is designed to be UI-framework
-//! agnostic, providing building blocks that can be used with any Rust UI framework
-//! (egui, iced, Tauri, slint, etc.).
+//! user interface for the Photo Extraction Tool, focused on iOS device (iPhone/iPad)
+//! photo extraction. It is designed to be UI-framework agnostic, providing building
+//! blocks that can be used with any Rust UI framework (egui, iced, Tauri, slint, etc.).
+//!
+//! No iTunes installation or additional drivers are required on Windows 10/11.
 //!
 //! # Architecture
 //!

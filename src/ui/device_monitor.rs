@@ -1,8 +1,8 @@
 //! Device Monitor Module
 //!
-//! Provides hot-plug detection and device state tracking for iOS devices.
+//! Provides hot-plug detection and device state tracking for iOS devices (iPhone/iPad).
 //! This module monitors for device connections/disconnections and tracks
-//! device states (locked, trusted, etc.).
+//! device states (locked, trusted, etc.). No iTunes or additional drivers required.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -538,7 +538,7 @@ impl DeviceStateChecker {
     pub fn state_message(state: &DeviceState) -> &'static str {
         match state {
             DeviceState::Connected => "Connected and ready",
-            DeviceState::Locked => "Device is locked. Please unlock your iPhone/iPad.",
+            DeviceState::Locked => "Device is locked. Please unlock your iOS device.",
             DeviceState::NeedsTrust => {
                 "Please tap 'Trust' on your device when prompted to allow access."
             }

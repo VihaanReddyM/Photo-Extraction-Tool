@@ -2,6 +2,7 @@
 //!
 //! A fast, reliable library for extracting photos and videos from iOS devices
 //! (iPhone/iPad) on Windows using the Windows Portable Devices (WPD) API.
+//! No iTunes installation or additional drivers are required on Windows 10/11.
 //!
 //! # Architecture
 //!
@@ -98,7 +99,7 @@
 //!
 //! # Features
 //!
-//! - **No iTunes Required** - Direct device access via WPD API
+//! - **No iTunes or Drivers Required** - Works out of the box on Windows 10/11
 //! - **Incremental Backups** - Track extracted files to avoid re-downloading
 //! - **Duplicate Detection** - SHA256-based exact duplicate detection
 //! - **Multi-Device Support** - Manage multiple devices with profiles
@@ -110,9 +111,9 @@
 //!
 //! # Platform Support
 //!
-//! This library currently only supports Windows due to its reliance on the
-//! Windows Portable Devices API. Future versions may add support for other
-//! platforms using different backends.
+//! This library only supports Windows due to its reliance on the Windows
+//! Portable Devices (WPD) API. No iTunes installation or additional drivers
+//! are required — Windows 10/11 includes built-in USB/MTP support for iOS devices.
 
 // Core modules - always available
 pub mod cli;

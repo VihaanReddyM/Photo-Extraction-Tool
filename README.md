@@ -1,6 +1,6 @@
 # 📸 Photo Extraction Tool
 
-A fast, reliable command-line tool for extracting photos and videos from iOS devices (iPhone/iPad) on Windows — **no iTunes required**.
+A fast, reliable command-line tool for extracting photos and videos from iOS devices (iPhone/iPad) on Windows — **no iTunes or additional drivers required**.
 
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -11,7 +11,7 @@ A fast, reliable command-line tool for extracting photos and videos from iOS dev
 ## ✨ Features
 
 - **🚀 Fast & Efficient** — Direct device access via Windows Portable Devices (WPD) API
-- **📱 No iTunes Required** — Works independently, no Apple software needed
+- **📱 No iTunes or Drivers Required** — Works out of the box on Windows 10/11
 - **🔄 Incremental Backups** — Only extract new photos, skip existing ones
 - **🔍 Duplicate Detection** — SHA256 hashing to detect exact duplicates (photos & videos)
 - **👥 Multi-Device Support** — Manage and organize photos from multiple devices
@@ -62,8 +62,8 @@ cargo build --release
 
 ## 🚀 Quick Start
 
-1. **Connect your iPhone/iPad** to your Windows PC via USB
-2. **Trust the computer** when prompted on your device
+1. **Connect your iOS device (iPhone/iPad)** to your Windows PC via USB
+2. **Unlock your device** and tap **"Trust"** when prompted
 3. **Run the tool**:
 
 ```bash
@@ -412,10 +412,13 @@ extracted_photos/
 
 ### Device Not Detected
 
-1. **Trust the Computer**: When you connect your iPhone, tap "Trust" on the device
-2. **Unlock Your Device**: The device must be unlocked for access
-3. **Check USB Connection**: Try a different cable or USB port
-4. **Restart the Device**: Sometimes a restart helps
+1. **Unlock Your Device**: The iOS device must be unlocked for access
+2. **Trust the Computer**: Tap "Trust" when prompted on your iPhone/iPad
+3. **Check USB Connection**: Try a different USB cable or port
+4. **Restart the Device**: A restart can resolve connection issues
+5. **Windows Update**: Ensure Windows is up to date (includes USB drivers)
+
+> **Note**: No iTunes installation or additional drivers are required. Windows 10/11 includes built-in support for iOS devices via the Windows Portable Devices (WPD) API.
 
 ### Slow Extraction
 
@@ -432,8 +435,8 @@ extracted_photos/
 
 | Error | Solution |
 |-------|----------|
-| "No devices found" | Connect device, unlock it, and trust the computer |
-| "Access denied" | Unlock device or run as Administrator |
+| "No devices found" | Connect device, unlock it, and tap "Trust" on the device |
+| "Access denied" | Unlock your iOS device or run the tool as Administrator |
 | "Path not found" | Check output directory exists |
 | "Config file not found" | Run `photo_extraction_tool config` to create one |
 
@@ -472,7 +475,7 @@ src/
 - **`lib.rs`** - Library crate that exposes the public API, allowing the core functionality to be reused by other applications (e.g., a future GUI)
 - **`cli/`** - All CLI-specific code is isolated here, making it easy to add alternative interfaces
 - **`core/`** - Business logic that's independent of the interface (config, extraction, tracking)
-- **`device/`** - Hardware interaction layer (WPD API, device profiles)
+- **`device/`** - Hardware interaction layer (WPD API for iOS devices, device profiles)
 - **`duplicate/`** - SHA256-based duplicate detection with size pre-filtering and caching
 
 This separation allows for:
@@ -488,8 +491,10 @@ This separation allows for:
 ### Prerequisites
 
 - [Rust](https://rustup.rs/) 1.75 or later
-- Windows 10/11 (WPD API is Windows-only)
+- Windows 10/11 (uses the Windows Portable Devices API)
 - Visual Studio Build Tools (for Windows API bindings)
+
+> **Note**: No iTunes or Apple-specific drivers are required. Windows 10/11 includes built-in USB/MTP drivers that work with iOS devices.
 
 ### Build Steps
 
@@ -559,7 +564,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 🙏 Acknowledgments
 
-- Windows Portable Devices API documentation
+- Microsoft Windows Portable Devices API documentation
 - The Rust community for excellent crates
 - Contributors and testers
 

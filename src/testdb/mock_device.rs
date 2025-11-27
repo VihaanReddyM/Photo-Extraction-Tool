@@ -1,9 +1,9 @@
-//! Mock device implementation for testing without a real device
+//! Mock device implementation for testing without a real iOS device
 //!
 //! This module provides mock implementations of the device traits from `device::traits`
-//! that simulate a connected iOS device with a configurable file structure.
+//! that simulate a connected iOS device (iPhone/iPad) with a configurable file structure.
 //! This enables comprehensive testing of the extraction pipeline without
-//! connecting a real device.
+//! connecting a real iOS device.
 //!
 //! # Memory Efficiency
 //!

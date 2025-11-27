@@ -24,7 +24,7 @@
 # Use forward slashes (/) or double backslashes (\\) for Windows paths.
 # Examples:
 #   "./extracted_photos"          - Relative to current directory
-#   "D:/Photos/iPhone Backup"     - Absolute path on Windows
+#   "D:/Photos/iOS Backup"        - Absolute path on Windows
 #   "/home/user/Photos"           - Absolute path on Linux/macOS
 directory = "./extracted_photos"
 
@@ -43,13 +43,17 @@ skip_existing = true
 organize_by_date = false
 
 # Create a subfolder named after the device.
-# Example: "extracted_photos/John's iPhone 15/..."
+# Example: "extracted_photos/Johns_iPhone_15/..."
 subfolder_by_device = false
 
 
 # ┌──────────────────────────────────────────────────────────────────────────────┐
 # │                            📱 DEVICE SETTINGS                                │
 # └──────────────────────────────────────────────────────────────────────────────┘
+# This tool primarily targets iOS devices (iPhone/iPad) but can also work with
+# other MTP-compatible devices when apple_only is set to false.
+# No iTunes installation or additional drivers are required on Windows 10/11.
+
 [device]
 
 # Specific device ID to use for extraction.
@@ -58,15 +62,16 @@ subfolder_by_device = false
 # device_id = "\\\\?\\usb#vid_05ac&pid_12a8#..."
 
 # Filter devices by name (partial match, case-insensitive).
-# Useful when you have multiple devices and want to target a specific one.
+# Useful when you have multiple iOS devices and want to target a specific one.
 # Examples:
 #   "iPhone"        - Match any iPhone
 #   "iPhone 15"     - Match iPhone 15 specifically
 #   "iPad Pro"      - Match iPad Pro
 # device_name_filter = "iPhone"
 
-# Only show Apple devices (iPhone, iPad, iPod).
-# Set to `false` to also detect Android phones, cameras, and other MTP devices.
+# Only show Apple devices (iPhone, iPad, iPod touch).
+# Set to `false` to also detect other MTP-compatible devices (Android, cameras, etc.)
+# Note: This tool is optimized for iOS devices; other devices may have limited support.
 apple_only = true
 
 
@@ -156,7 +161,7 @@ enabled = false
 # The tool will compute SHA256 hashes of all media files in these folders.
 # Use absolute paths for reliability.
 # Examples:
-#   comparison_folders = ["D:/Photos", "D:/Backup/Old iPhone"]
+#   comparison_folders = ["D:/Photos", "D:/Backup/iOS Backup"]
 #   comparison_folders = ["C:/Users/John/Pictures", "E:/Photo Archive"]
 comparison_folders = []
 
@@ -201,7 +206,7 @@ media_only = true
 enabled = false
 
 # Base folder where device subfolders will be created.
-# Example: If set to "D:/Photos", iPhone photos go to "D:/Photos/iPhone_Name/"
+# Example: If set to "D:/Photos", your iOS device photos go to "D:/Photos/Device_Name/"
 backup_base_folder = "D:/Photos"
 
 # Path to the profiles database file.

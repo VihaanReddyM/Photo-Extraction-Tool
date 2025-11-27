@@ -1,7 +1,7 @@
 //! Test Database Module
 //!
 //! This module provides a comprehensive testing framework for the photo extraction tool
-//! that allows testing all features without connecting a real phone to the PC.
+//! that allows testing all features without connecting a real iOS device to the PC.
 //!
 //! # Architecture
 //!

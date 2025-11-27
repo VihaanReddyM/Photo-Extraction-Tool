@@ -1,8 +1,8 @@
 //! Preview and Thumbnail Support Module
 //!
 //! Provides functionality for generating and caching thumbnails/previews
-//! of photos before extraction. This enables UIs to show users what
-//! photos are available on the device.
+//! of photos before extraction from iOS devices (iPhone/iPad). This enables
+//! UIs to show users what photos are available on the connected device.
 
 use std::collections::HashMap;
 use std::path::Path;

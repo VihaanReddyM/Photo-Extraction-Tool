@@ -342,9 +342,9 @@ fn find_all_photos(content: &DeviceContent, dcim_only: bool) -> Result<Vec<Photo
     if root_objects.is_empty() {
         warn!("No root objects found on device!");
         warn!("This usually means:");
-        warn!("  1. The iPhone is locked - please unlock it");
-        warn!("  2. You haven't tapped 'Trust' on the iPhone");
-        warn!("  3. iTunes/Apple Mobile Device Support is not installed");
+        warn!("  1. The iOS device is locked — please unlock it");
+        warn!("  2. You haven't tapped 'Trust' on the device");
+        warn!("  3. Try a different USB cable or port");
         return Ok(photos);
     }
 

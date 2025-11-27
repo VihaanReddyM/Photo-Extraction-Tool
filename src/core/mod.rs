@@ -16,7 +16,7 @@
 //!
 //! The `generic_extractor` module provides extraction functionality that works
 //! with any device implementing `DeviceContentTrait`. This enables the same
-//! extraction logic to work with both real WPD devices and mock devices.
+//! extraction logic to work with both real iOS devices (via WPD) and mock devices.
 //!
 //! ```rust,no_run
 //! use photo_extraction_tool::core::generic_extractor::{GenericExtractor, GenericExtractionConfig};

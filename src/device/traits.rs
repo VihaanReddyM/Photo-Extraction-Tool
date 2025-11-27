@@ -1,8 +1,8 @@
 //! Device abstraction traits for testability
 //!
 //! This module defines traits that abstract device operations, allowing both
-//! real WPD devices and mock devices to be used interchangeably. This enables
-//! comprehensive testing of the extraction pipeline without connecting a real device.
+//! real iOS devices (via WPD) and mock devices to be used interchangeably. This enables
+//! comprehensive testing of the extraction pipeline without connecting a real iOS device.
 //!
 //! # Architecture
 //!

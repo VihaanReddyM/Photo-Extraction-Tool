@@ -1,8 +1,8 @@
 //! UI Events Module
 //!
 //! Defines thread-safe event types for communication between the backend
-//! extraction engine and UI frontends. These events are designed to be
-//! sent through channels and consumed by any UI framework.
+//! iOS device (iPhone/iPad) extraction engine and UI frontends. These events
+//! are designed to be sent through channels and consumed by any UI framework.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};

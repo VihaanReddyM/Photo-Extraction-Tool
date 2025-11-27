@@ -2,7 +2,7 @@
 //!
 //! This module provides extraction functionality that works with any device
 //! implementing the `DeviceContentTrait`. This enables the same extraction
-//! logic to work with both real WPD devices and mock devices for testing.
+//! logic to work with both real iOS devices (via WPD) and mock devices for testing.
 //!
 //! # Example
 //!
