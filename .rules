@@ -1,0 +1,235 @@
+# Photo Extraction Tool - Project Rules
+# =====================================
+# These rules define coding standards, architecture decisions, and best practices
+# for maintaining and extending this project.
+
+## Code Style & Formatting
+## -----------------------
+
+### Rust Edition
+- Use Rust 2021 edition
+- Target stable Rust (no nightly features)
+
+### Formatting
+- Run `cargo fmt` before committing
+- Maximum line length: 100 characters
+- Use 4 spaces for indentation (no tabs)
+- Group imports: std, external crates, internal modules
+
+### Naming Conventions
+- Types: PascalCase (e.g., `DeviceManager`, `ExtractionConfig`)
+- Functions/methods: snake_case (e.g., `extract_photos`, `get_device_info`)
+- Constants: SCREAMING_SNAKE_CASE (e.g., `MAX_BUFFER_SIZE`)
+- Modules: snake_case (e.g., `device_monitor`, `generic_extractor`)
+- Traits: PascalCase with `Trait` suffix for abstraction traits (e.g., `DeviceContentTrait`)
+
+### Documentation
+- All public items MUST have doc comments (`///`)
+- Module-level docs (`//!`) required for all modules
+- Include examples in doc comments for complex APIs
+- Use `# Example` sections in doc comments
+
+## Architecture Rules
+## ------------------
+
+### Module Organization
+- `core/` - Core business logic (extraction, config, tracking)
+- `device/` - Device interaction (WPD API, traits, profiles)
+- `duplicate/` - Duplicate detection
+- `cli/` - Command-line interface only
+- `ui/` - UI support (events, controllers, monitors)
+- `testdb/` - Testing infrastructure (mock devices, scenarios)
+
+### Trait-Based Abstraction
+- Device operations MUST go through traits (`DeviceContentTrait`, `DeviceManagerTrait`)
+- This enables testing without real devices
+- Never use WPD types directly in core extraction logic
+
+### Threading Model
+- UI components MUST use channel-based communication
+- Use `mpsc` channels for event passing
+- Use atomic types for shared state (not mutexes in hot paths)
+- All `Trait` bounds should include `Send + Sync` for thread safety
+
+### Error Handling
+- Use `thiserror` for error type definitions
+- Use `anyhow` for error propagation in binaries
+- Custom `Result<T>` type alias in each module
+- Errors should be descriptive and actionable for users
+
+## Testing Rules
+## -------------
+
+### Test Coverage
+- All public APIs must have unit tests
+- Integration tests for cross-module functionality
+- Use `testdb` module for device-related testing
+
+### Test Organization
+- Unit tests in `#[cfg(test)]` modules within source files
+- Integration tests in `tests/` directory
+- Test scenarios defined in `testdb/scenarios.rs`
+
+### Mock Devices
+- Use `MockDeviceManager` and `MockFileSystem` for testing
+- Never require a real device for automated tests
+- Test both success and failure paths
+
+### Memory Considerations
+- Tests must not allocate excessive memory
+- Use lazy content generation for large test files
+- Run tests with `cargo test` - they should complete without crashes
+
+## Dependencies
+## ------------
+
+### Dependency Policy
+- Prefer well-maintained, widely-used crates
+- Minimize dependency count where reasonable
+- Pin versions in Cargo.toml for reproducibility
+
+### Required Dependencies
+- `windows` - Windows API bindings (WPD)
+- `clap` - CLI argument parsing
+- `serde` + `serde_json` + `toml` - Serialization
+- `sha2` - Hashing for duplicate detection
+- `thiserror` + `anyhow` - Error handling
+- `log` + `env_logger` - Logging
+- `chrono` - Date/time handling
+- `rayon` - Parallel processing
+
+### Optional Dependencies
+- `image` - Only if thumbnail generation is needed
+- Keep image processing optional to reduce binary size
+
+## Performance Rules
+## -----------------
+
+### Memory Efficiency
+- Use streaming for large file operations
+- Avoid loading entire files into memory when possible
+- Use size pre-filtering before expensive hash operations
+- Cache results where appropriate (e.g., duplicate index)
+
+### Concurrency
+- Use `rayon` for parallel file scanning
+- Keep UI responsive with background threads
+- Use atomic operations for progress tracking
+
+### File I/O
+- Buffer file reads/writes (64KB default buffer)
+- Use `BufReader`/`BufWriter` for file operations
+- Avoid unnecessary file system calls
+
+## Platform Rules
+## ---------------
+
+### Windows-Specific
+- This is a Windows-only tool (WPD API requirement)
+- Use Windows path conventions
+- Handle Unicode file names correctly
+- Set file attributes (e.g., hidden for tracking files)
+
+### COM Handling
+- Always initialize COM before WPD operations
+- Use RAII for COM guard (`ComGuard`)
+- Clean up COM resources properly
+
+## Configuration Rules
+## -------------------
+
+### Config File Format
+- Use TOML for configuration files
+- Provide sensible defaults for all settings
+- Document all config options in `config.example.toml`
+
+### Config Location
+- Use platform-appropriate config directories
+- Support both user config and project-local config
+
+## Git & Version Control
+## ---------------------
+
+### Commit Messages
+- Use conventional commits format
+- Prefix: feat, fix, docs, refactor, test, chore
+- Keep subject line under 72 characters
+
+### Branch Strategy
+- `main` - stable, release-ready code
+- Feature branches for new development
+- PR required for main branch
+
+### What to Commit
+- Source code and tests
+- Documentation
+- Configuration examples
+- DO NOT commit: target/, *.exe, cache files, personal configs
+
+## Security Rules
+## ---------------
+
+### API Keys & Secrets
+- Never hardcode secrets
+- Use environment variables or secure config
+- Document required secrets without exposing them
+
+### File Handling
+- Validate file paths before operations
+- Prevent path traversal attacks
+- Handle symbolic links carefully
+
+## UI Module Specific Rules
+## ------------------------
+
+### Event System
+- All background operations emit events
+- Events must be `Clone` and `Send`
+- Use structured event types, not strings
+
+### Controller Pattern
+- Controllers manage background operations
+- State must be queryable without blocking
+- Support cancellation at any point
+
+### Device Monitoring
+- Polling-based (no native Windows notifications used)
+- Configurable poll intervals
+- Graceful handling of device disconnection
+
+## Backward Compatibility
+## ----------------------
+
+### API Stability
+- Public API changes require version bump
+- Deprecate before removing
+- Document breaking changes
+
+### Config Compatibility
+- New config options must have defaults
+- Support reading older config versions
+- Migration path for breaking config changes
+
+### Cache/State Files
+- Version cache file formats
+- Handle corrupted/outdated files gracefully
+- Provide rebuild mechanisms
+
+## Documentation Requirements
+## --------------------------
+
+### README.md
+- Project overview and features
+- Installation instructions
+- Basic usage examples
+- Configuration guide
+
+### Code Documentation
+- Module-level docs explaining purpose
+- Function docs with parameters and return values
+- Complex algorithms need inline comments
+
+### Architecture Docs
+- Keep `docs/UI_ARCHITECTURE.md` updated
+- Document major design decisions
+- Include diagrams where helpful
