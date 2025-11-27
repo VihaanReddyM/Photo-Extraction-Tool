@@ -3,6 +3,10 @@
 //! Manages device profiles that map device IDs to user-friendly names and output folders.
 //! When a new device is detected, prompts the user for a name and creates a profile.
 //!
+//! The profiles database is saved in two locations:
+//! 1. The main profiles file (configurable, usually in app data)
+//! 2. A copy in the backup base folder (for portability and backup)
+//!
 //! Some accessor methods are kept for API completeness and future use.
 
 use crate::core::config::{DeviceProfile, DeviceProfilesConfig};
@@ -17,6 +21,9 @@ use std::fs::{self, File};
 use std::io::{BufReader, BufWriter};
 use std::path::{Path, PathBuf};
 
+/// Name of the profiles copy file in the backup directory
+const BACKUP_PROFILES_FILENAME: &str = "device_profiles.json";
+
 /// Stored device profiles database
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DeviceProfilesDatabase {
@@ -25,6 +32,14 @@ pub struct DeviceProfilesDatabase {
 
     /// Device profiles indexed by device_id
     pub profiles: HashMap<String, DeviceProfile>,
+
+    /// Last updated timestamp
+    #[serde(default)]
+    pub last_updated: Option<String>,
+
+    /// Backup base folder (for reference in the backup copy)
+    #[serde(default)]
+    pub backup_location: Option<String>,
 }
 
 /// Device profiles manager
@@ -47,12 +62,16 @@ impl ProfileManager {
             database: DeviceProfilesDatabase {
                 version: 1,
                 profiles: HashMap::new(),
+                last_updated: None,
+                backup_location: None,
             },
             dirty: false,
         }
     }
 
     /// Load profiles from disk
+    ///
+    /// This loads from the main profiles file and syncs to the backup folder.
     pub fn load(&mut self) -> Result<()> {
         if !self.config.profiles_file.exists() {
             debug!(
@@ -82,22 +101,32 @@ impl ProfileManager {
             let _ = id; // Suppress unused warning
         }
 
+        // Sync to backup folder to ensure it's up to date
+        if let Err(e) = self.ensure_backup_synced() {
+            warn!("Failed to sync profiles to backup folder: {}", e);
+        }
+
         Ok(())
     }
 
-    /// Save profiles to disk
+    /// Save profiles to disk (both main file and backup copy)
     pub fn save(&mut self) -> Result<()> {
         if !self.dirty {
             return Ok(());
         }
 
-        // Ensure parent directory exists
+        // Update metadata
+        self.database.last_updated = Some(Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string());
+        self.database.backup_location = Some(self.config.backup_base_folder.display().to_string());
+
+        // Ensure parent directory exists for main profiles file
         if let Some(parent) = self.config.profiles_file.parent() {
             fs::create_dir_all(parent).map_err(|e| {
                 ExtractionError::IoError(format!("Failed to create profiles directory: {}", e))
             })?;
         }
 
+        // Save to main profiles file
         let file = File::create(&self.config.profiles_file).map_err(|e| {
             ExtractionError::IoError(format!("Failed to create profiles file: {}", e))
         })?;
@@ -113,8 +142,70 @@ impl ProfileManager {
             self.config.profiles_file.display()
         );
 
+        // Also save a copy to the backup base folder
+        self.sync_to_backup_folder()?;
+
         self.dirty = false;
         Ok(())
+    }
+
+    /// Sync profiles to the backup folder
+    ///
+    /// This creates/updates a copy of the profiles database in the backup
+    /// base folder so users can see which devices have been backed up.
+    fn sync_to_backup_folder(&self) -> Result<()> {
+        // Only sync if backup folder exists and is configured
+        if self.config.backup_base_folder.as_os_str().is_empty() {
+            debug!("Backup base folder not configured, skipping profile sync");
+            return Ok(());
+        }
+
+        // Create backup folder if it doesn't exist
+        if !self.config.backup_base_folder.exists() {
+            fs::create_dir_all(&self.config.backup_base_folder).map_err(|e| {
+                ExtractionError::IoError(format!(
+                    "Failed to create backup folder '{}': {}",
+                    self.config.backup_base_folder.display(),
+                    e
+                ))
+            })?;
+        }
+
+        let backup_profiles_path = self
+            .config
+            .backup_base_folder
+            .join(BACKUP_PROFILES_FILENAME);
+
+        let file = File::create(&backup_profiles_path).map_err(|e| {
+            ExtractionError::IoError(format!(
+                "Failed to create backup profiles file '{}': {}",
+                backup_profiles_path.display(),
+                e
+            ))
+        })?;
+
+        let writer = BufWriter::new(file);
+        serde_json::to_writer_pretty(writer, &self.database).map_err(|e| {
+            ExtractionError::IoError(format!("Failed to write backup profiles file: {}", e))
+        })?;
+
+        debug!(
+            "Synced profiles to backup folder: {}",
+            backup_profiles_path.display()
+        );
+
+        Ok(())
+    }
+
+    /// Force sync profiles to backup folder (even if not dirty)
+    ///
+    /// Call this after loading profiles to ensure the backup copy is up to date.
+    pub fn ensure_backup_synced(&mut self) -> Result<()> {
+        // Update metadata before syncing
+        self.database.last_updated = Some(Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string());
+        self.database.backup_location = Some(self.config.backup_base_folder.display().to_string());
+
+        self.sync_to_backup_folder()
     }
 
     /// Get profile for a device, prompting user if not found
@@ -250,13 +341,31 @@ impl ProfileManager {
 
     /// List all known profiles
     pub fn list_profiles(&self) {
+        println!("\nDevice Profiles:");
+        println!("========================================");
+        println!(
+            "Backup location: {}",
+            self.config.backup_base_folder.display()
+        );
+        if let Some(ref updated) = self.database.last_updated {
+            println!("Last updated: {}", updated);
+        }
+
+        // Show backup profiles file location
+        let backup_profiles_path = self
+            .config
+            .backup_base_folder
+            .join(BACKUP_PROFILES_FILENAME);
+        println!("Profiles file: {}", backup_profiles_path.display());
+
         if self.database.profiles.is_empty() {
-            println!("No device profiles configured.");
+            println!("\nNo devices registered yet.");
+            println!("Connect an iOS device to create a profile.");
+            println!("========================================\n");
             return;
         }
 
-        println!("\nConfigured Device Profiles:");
-        println!("========================================");
+        println!("\nRegistered Devices ({}):", self.database.profiles.len());
 
         for (id, profile) in &self.database.profiles {
             let output_path = self.config.backup_base_folder.join(&profile.output_folder);

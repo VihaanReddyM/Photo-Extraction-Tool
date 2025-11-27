@@ -373,18 +373,42 @@ fn find_all_photos(content: &DeviceContent, dcim_only: bool) -> Result<Vec<Photo
                     }
 
                     if dcim_only {
-                        // Look for DCIM folder
-                        for child in children {
+                        // First, look for traditional DCIM folder
+                        let mut found_dcim = false;
+                        for child in &children {
                             let child_name_upper = child.name.to_uppercase();
                             if child_name_upper == "DCIM" && child.is_folder {
                                 info!("Found DCIM folder inside '{}', scanning...", obj.name);
+                                found_dcim = true;
                                 scan_folder_recursive(
                                     content,
-                                    &child,
+                                    child,
                                     "DCIM",
                                     &mut photos,
                                     &progress,
                                 )?;
+                            }
+                        }
+
+                        // If no DCIM found, look for iOS date-based photo folders
+                        // These have patterns like "202511__", "201902__", "202506_a", etc.
+                        // (6 digits for YYYYMM followed by underscore or other chars)
+                        if !found_dcim {
+                            debug!(
+                                "No DCIM folder found, scanning for date-based photo folders..."
+                            );
+                            for child in children {
+                                if child.is_folder && is_ios_photo_folder(&child.name) {
+                                    debug!("Found photo folder '{}', scanning...", child.name);
+                                    let path = child.name.clone();
+                                    scan_folder_recursive(
+                                        content,
+                                        &child,
+                                        &path,
+                                        &mut photos,
+                                        &progress,
+                                    )?;
+                                }
                             }
                         }
                     } else {
@@ -427,11 +451,35 @@ fn find_all_photos(content: &DeviceContent, dcim_only: bool) -> Result<Vec<Photo
     }
 
     if photos.is_empty() && dcim_only {
-        warn!("No DCIM folder found. Try running with --dcim-only false to scan all folders.");
+        warn!("No photos found. Try running with --dcim-only false to scan all folders.");
     }
 
     progress.finish();
     Ok(photos)
+}
+
+/// Check if a folder name looks like an iOS photo folder
+/// iOS sometimes uses date-based folder names like "202511__", "201902__", "202506_a"
+/// Pattern: 6 digits (YYYYMM) followed by underscore or other suffix
+fn is_ios_photo_folder(name: &str) -> bool {
+    if name.len() < 6 {
+        return false;
+    }
+
+    // Check if first 6 characters are digits (YYYYMM format)
+    let first_six = &name[..6];
+    if !first_six.chars().all(|c| c.is_ascii_digit()) {
+        return false;
+    }
+
+    // Validate it looks like a reasonable date (year 2000-2099, month 01-12)
+    if let Ok(year) = first_six[..4].parse::<u32>() {
+        if let Ok(month) = first_six[4..6].parse::<u32>() {
+            return (2000..=2099).contains(&year) && (1..=12).contains(&month);
+        }
+    }
+
+    false
 }
 
 /// Recursively scan a folder for photos

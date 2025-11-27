@@ -60,6 +60,9 @@ dialoguer = "0.11"
 # Random number generation (for test scenarios)
 rand = "0.8"
 
+# Platform-specific directories (Pictures, Documents, etc.)
+dirs = "5.0"
+
 # Base64 encoding (for thumbnail data URLs)
 base64 = "0.22"
 

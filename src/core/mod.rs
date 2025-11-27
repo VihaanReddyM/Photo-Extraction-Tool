@@ -36,6 +36,7 @@ pub mod config;
 pub mod error;
 pub mod extractor;
 pub mod generic_extractor;
+pub mod setup;
 pub mod tracking;
 
 // Re-export commonly used types
@@ -45,5 +46,8 @@ pub use extractor::{extract_photos, ExtractionConfig, ExtractionStats};
 pub use generic_extractor::{
     ExtractionPhase, ExtractionStats as GenericExtractionStats, GenericExtractionConfig,
     GenericExtractor, ProgressUpdate,
+};
+pub use setup::{
+    apply_setup, is_setup_complete, run_setup_wizard, SetupError, SetupOptions, SetupResult,
 };
 pub use tracking::StateTracker;

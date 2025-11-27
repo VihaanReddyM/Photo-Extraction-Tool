@@ -6,13 +6,14 @@ use crate::cli::progress::{BenchmarkProgress, ScanProgressTracker};
 use crate::cli::{Args, Commands, TestCommands};
 use crate::core::config::{get_config_path, init_config, open_config_in_editor, Config};
 use crate::core::extractor;
+use crate::core::setup::run_setup_wizard;
 use crate::device::traits::{DeviceContentTrait, DeviceManagerTrait};
 use crate::device::{self, ProfileManager};
 use crate::testdb::{
     self, InteractiveTestMode, MockDataGenerator, ScenarioLibrary, TestRunner, TestRunnerConfig,
 };
 use anyhow::Result;
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use std::fs;
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -20,7 +21,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 /// Run the appropriate command based on CLI arguments
+///
+/// If initial setup is required (no backup directory configured), this will
+/// run the setup wizard first before proceeding with extraction commands.
 pub fn run_command(args: &Args, config: &Config, shutdown_flag: Arc<AtomicBool>) -> Result<()> {
+    // Check if setup is needed for extraction commands
+    let config = check_and_run_setup_if_needed(args, config)?;
+
     match &args.command {
         Some(Commands::Config { path, reset }) => {
             handle_config_command(*path, *reset)?;
@@ -28,15 +35,15 @@ pub fn run_command(args: &Args, config: &Config, shutdown_flag: Arc<AtomicBool>)
         Some(Commands::GenerateConfig { output }) => {
             generate_config_file(output.clone())?;
         }
-        Some(Commands::ShowConfig) => {
-            show_config(config);
-        }
         Some(Commands::List { all }) => {
             let use_all = *all || !config.device.apple_only;
             list_devices(use_all)?;
         }
+        Some(Commands::ShowConfig) => {
+            show_config(&config);
+        }
         Some(Commands::Scan { depth }) => {
-            scan_device(config, *depth)?;
+            scan_device(&config, *depth)?;
         }
         Some(Commands::Extract {
             detect_duplicates,
@@ -51,12 +58,12 @@ pub fn run_command(args: &Args, config: &Config, shutdown_flag: Arc<AtomicBool>)
                 .clone()
                 .or_else(|| args.duplicate_action.clone());
 
-            extract_photos_with_args(config, shutdown_flag, use_detect, folders, action)?;
+            extract_photos_with_args(&config, shutdown_flag, use_detect, folders, action)?;
         }
         None => {
             // Use global args when no subcommand specified
             extract_photos_with_args(
-                config,
+                &config,
                 shutdown_flag,
                 args.detect_duplicates,
                 args.compare_folders.clone(),
@@ -64,13 +71,13 @@ pub fn run_command(args: &Args, config: &Config, shutdown_flag: Arc<AtomicBool>)
             )?;
         }
         Some(Commands::ListProfiles) => {
-            list_profiles(config)?;
+            list_profiles(&config)?;
         }
         Some(Commands::RemoveProfile { name }) => {
-            remove_profile(config, name)?;
+            remove_profile(&config, name)?;
         }
         Some(Commands::BenchmarkScan { dcim_only }) => {
-            benchmark_scan(config, *dcim_only)?;
+            benchmark_scan(&config, *dcim_only)?;
         }
         Some(Commands::Test { test_command }) => {
             handle_test_command(test_command)?;
@@ -78,6 +85,51 @@ pub fn run_command(args: &Args, config: &Config, shutdown_flag: Arc<AtomicBool>)
     }
 
     Ok(())
+}
+
+/// Check if setup is needed and run the wizard if necessary
+///
+/// Returns the (possibly updated) config to use for the command.
+fn check_and_run_setup_if_needed(args: &Args, config: &Config) -> Result<Config> {
+    // Setup is only needed for extraction commands
+    let needs_extraction = matches!(
+        &args.command,
+        None | Some(Commands::Extract { .. }) | Some(Commands::Scan { .. })
+    );
+
+    if !needs_extraction {
+        return Ok(config.clone());
+    }
+
+    // Check if setup is required
+    if !config.needs_setup() {
+        debug!("Configuration is complete, no setup needed");
+        return Ok(config.clone());
+    }
+
+    // Check if user provided an output directory via CLI args
+    if let Some(ref output) = args.output {
+        debug!("Using output directory from CLI args: {}", output.display());
+        let mut config = config.clone();
+        config.set_backup_directory(output.clone());
+        return Ok(config);
+    }
+
+    // Need to run setup wizard
+    info!("Initial setup required...");
+
+    match run_setup_wizard(Some(config.clone())) {
+        Ok(result) => {
+            info!("Setup completed successfully");
+            Ok(result.config)
+        }
+        Err(e) => {
+            error!("Setup failed: {}", e);
+            Err(anyhow::anyhow!(
+                "Setup required but failed. Run 'photo_extraction_tool config' to configure manually."
+            ))
+        }
+    }
 }
 
 /// Handle test subcommands
@@ -265,6 +317,16 @@ pub fn show_config(config: &Config) {
     info!("");
     info!("Current Configuration:");
     info!("----------------------");
+    info!("[device_profiles]");
+    info!("  enabled = {}", config.device_profiles.enabled);
+    info!(
+        "  backup_base_folder = \"{}\"",
+        config.device_profiles.backup_base_folder.display()
+    );
+    if config.needs_setup() {
+        info!("  ⚠ Setup required - run the tool to configure backup location");
+    }
+    info!("");
     info!("[output]");
     info!("  directory = \"{}\"", config.output.directory.display());
     info!(

@@ -11,28 +11,73 @@ A fast, reliable command-line tool for extracting photos and videos from iOS dev
 ## ✨ Features
 
 - **🚀 Fast & Efficient** — Direct device access via Windows Portable Devices (WPD) API
-- **📱 No iTunes or Drivers Required** — Works out of the box on Windows 10/11
+- **📱 No iTunes Required** — Works out of the box on Windows 10/11
 - **🔄 Incremental Backups** — Only extract new photos, skip existing ones
-- **🔍 Duplicate Detection** — SHA256 hashing to detect exact duplicates (photos & videos)
-- **👥 Multi-Device Support** — Manage and organize photos from multiple devices
+- **👥 Multi-Device Support** — Automatic organization by device (enabled by default)
+- **🔍 Duplicate Detection** — SHA256 hashing to detect exact duplicates
 - **📁 Flexible Organization** — Preserve folder structure or organize by date
 - **⏸️ Resume Support** — Interrupted? Continue from where you left off
-- **📊 Progress Tracking** — Real-time progress bar with ETA
-- **⚙️ Highly Configurable** — TOML configuration file for all settings
+- **📊 Progress Tracking** — Real-time progress bar with detailed stats
+- **⚙️ Easy Setup** — First-run wizard guides you through configuration
 
 ---
 
 ## 📋 Table of Contents
 
-- [Installation](#-installation)
 - [Quick Start](#-quick-start)
+- [Installation](#-installation)
 - [Usage](#-usage)
 - [Configuration](#-configuration)
 - [Features in Detail](#-features-in-detail)
 - [Troubleshooting](#-troubleshooting)
 - [Building from Source](#-building-from-source)
-- [Contributing](#-contributing)
-- [License](#-license)
+
+---
+
+## 🚀 Quick Start
+
+### First Time Setup
+
+1. **Connect your iOS device** (iPhone/iPad) to your Windows PC via USB
+2. **Unlock your device** and tap **"Trust"** when prompted
+3. **Run the tool**:
+
+```bash
+photo_extraction_tool
+```
+
+4. **Follow the setup wizard** — it will ask where to save your photos:
+
+```
+╔══════════════════════════════════════════════════════════════════╗
+║           📸 Photo Extraction Tool - First Time Setup            ║
+╠══════════════════════════════════════════════════════════════════╣
+║  Welcome! Let's set up your photo backup preferences.            ║
+╚══════════════════════════════════════════════════════════════════╝
+
+Where would you like to save your photos?
+
+Suggested locations:
+  [1] C:/Users/John/Pictures/iOS Backup
+  [2] C:/Users/John/Documents/iOS Photos
+  [3] D:/Photos
+
+Enter a path or number from above:
+> 
+```
+
+That's it! Your photos will be extracted to a device-specific folder like:
+```
+D:/Photos/Johns_iPhone_15/
+```
+
+### Subsequent Runs
+
+Just run the tool — it remembers your settings and only extracts new photos:
+
+```bash
+photo_extraction_tool
+```
 
 ---
 
@@ -60,84 +105,41 @@ cargo build --release
 
 ---
 
-## 🚀 Quick Start
-
-1. **Connect your iOS device (iPhone/iPad)** to your Windows PC via USB
-2. **Unlock your device** and tap **"Trust"** when prompted
-3. **Run the tool**:
-
-```bash
-# Extract all photos to the default directory
-photo-extraction-tool
-
-# Extract to a specific folder
-photo-extraction-tool --output "D:/Photos/iPhone Backup"
-
-# List connected devices
-photo-extraction-tool list
-
-# Extract with duplicate detection
-photo-extraction-tool extract --detect-duplicates --compare-to "D:/ExistingPhotos"
-
-# Open the config file in your default editor
-photo-extraction-tool config
-```
-
-That's it! Your photos will be extracted to the specified folder.
-
----
-
 ## 📖 Usage
 
 ### Basic Commands
 
 ```bash
-# Extract photos with default settings
-photo-extraction-tool
+# Extract photos (runs setup wizard on first use)
+photo_extraction_tool
 
-# Specify output directory
-photo-extraction-tool --output "./my_photos"
-photo-extraction-tool -o "D:/Backups/iPhone"
+# Extract to a specific folder (bypasses setup)
+photo_extraction_tool --output "D:/Photos/iPhone Backup"
 
-# Open and edit your configuration
-photo-extraction-tool config
+# List connected devices
+photo_extraction_tool list
 
-# Show where the config file is located
-photo-extraction-tool config --path
+# Open configuration file in your editor
+photo_extraction_tool config
 
-# Reset config to defaults
-photo-extraction-tool config --reset
+# Show current settings
+photo_extraction_tool show-config
 
-# Use a specific configuration file (override)
-photo-extraction-tool --config ./my_config.toml
-photo-extraction-tool -c ./my_config.toml
-
-# List all connected devices
-photo-extraction-tool --list-devices
-
-# Use a specific device (by ID)
-photo-extraction-tool --device "\\?\usb#vid_05ac..."
-
-# Show version
-photo-extraction-tool --version
-
-# Show help
-photo-extraction-tool --help
+# Extract with duplicate detection
+photo_extraction_tool --detect-duplicates --compare-to "D:/ExistingPhotos"
 ```
 
 ### Command-Line Options
 
 | Option | Short | Description |
 |--------|-------|-------------|
-| `--output <DIR>` | `-o` | Output directory for extracted photos |
-| `--config <FILE>` | `-c` | Path to configuration file |
-| `--device <ID>` | `-d` | Specific device ID to use |
+| `--output <DIR>` | `-o` | Output directory (overrides config) |
+| `--config <FILE>` | `-c` | Use a specific config file |
+| `--device-id <ID>` | `-d` | Extract from specific device |
 | `--detect-duplicates` | | Enable SHA256 duplicate detection |
 | `--compare-to <DIR>` | | Folder to compare against (repeatable) |
 | `--duplicate-action` | | Action for duplicates: skip, rename, overwrite |
-
-| `--verbose` | `-v` | Increase verbosity (can be repeated) |
-| `--quiet` | `-q` | Suppress non-error output |
+| `--all-devices` | | Show all MTP devices, not just Apple |
 | `--help` | `-h` | Show help message |
 | `--version` | `-V` | Show version |
 
@@ -145,266 +147,130 @@ photo-extraction-tool --help
 
 | Command | Description |
 |---------|-------------|
-| `config` | Open the config file in your default editor |
-| `config --path` | Show the config file location |
-| `config --reset` | Reset configuration to defaults |
-| `generate-config` | Generate config at a specific location |
-| `show-config` | Display current configuration settings |
+| `extract` | Extract photos (default command) |
 | `list` | List connected devices |
-| `extract` | Extract photos (default if no command given) |
-| `scan` | Scan device folder structure |
-| `list-profiles` | List configured device profiles |
-| `remove-profile` | Remove a device profile |
+| `config` | Open config file in editor |
+| `config --reset` | Reset to default settings |
+| `show-config` | Display current settings |
+| `scan` | View device folder structure |
+| `list-profiles` | Show configured device profiles |
 
 ---
 
 ## ⚙️ Configuration
 
-Configuration is stored in a standard location that persists across updates:
-
-| Platform | Location |
-|----------|----------|
-| **Windows** | `%APPDATA%\photo_extraction_tool\config.toml` |
-| **Linux/macOS** | `~/.config/photo_extraction_tool/config.toml` |
+Configuration is stored at:
+- **Windows**: `%APPDATA%\photo_extraction_tool\config.toml`
 
 ### Quick Setup
 
-The easiest way to configure the tool:
+The first time you run the tool, a setup wizard will guide you through essential settings. After that, you can edit settings with:
 
 ```bash
-# Open config in your default text editor (Notepad, VS Code, etc.)
-photo-extraction-tool config
+# Open config in your default editor
+photo_extraction_tool config
+
+# View current settings
+photo_extraction_tool show-config
+
+# Reset to defaults (will trigger setup wizard again)
+photo_extraction_tool config --reset
 ```
 
-This will:
-1. Create the config directory if it doesn't exist
-2. Create a default config file with all options documented
-3. Open it in your default editor for `.toml` files
+### Key Settings
 
-After editing, just save the file - changes apply on the next run.
-
-### Alternative: Local Config Override
-
-You can also place a `config.toml` in your current directory to override the global config. This is useful for project-specific settings. The search order is:
-
-1. `./config.toml` (current directory)
-2. `./photo_extraction.toml` (current directory)
-3. Standard config location (see table above)
-
-### Configuration Sections
-
-<details>
-<summary><b>📁 Output Settings</b></summary>
-
-```toml
-[output]
-# Where to save extracted photos
-directory = "./extracted_photos"
-
-# Keep original folder structure (e.g., DCIM/100APPLE/)
-preserve_structure = true
-
-# Skip files that already exist
-skip_existing = true
-
-# Organize into YYYY/MM folders by date
-organize_by_date = false
-
-# Create subfolder named after device
-subfolder_by_device = false
-```
-
-</details>
-
-<details>
-<summary><b>📱 Device Settings</b></summary>
-
-```toml
-[device]
-# Only detect Apple devices
-apple_only = true
-
-# Filter by device name (partial match)
-# device_name_filter = "iPhone 15"
-
-# Specific device ID
-# device_id = "\\?\usb#vid_05ac..."
-```
-
-</details>
-
-<details>
-<summary><b>🎯 Extraction Settings</b></summary>
-
-```toml
-[extraction]
-# Only extract from DCIM (Camera Roll)
-dcim_only = true
-
-# File type filters
-include_photos = true
-include_videos = true
-
-# Extension filters (empty = all)
-include_extensions = []  # e.g., ["jpg", "heic"]
-exclude_extensions = []  # e.g., ["aae"]
-
-# Size filters (0 = no limit)
-min_file_size = 0
-max_file_size = 0
-```
-
-</details>
-
-<details>
-<summary><b>🔍 Duplicate Detection</b></summary>
-
-```toml
-[duplicate_detection]
-# Enable SHA256-based exact duplicate detection
-enabled = false
-
-# Folders to compare against (will be indexed)
-comparison_folders = ["D:/Photos", "D:/Old Backups"]
-
-# Cache hashes for faster subsequent runs (JSON format)
-cache_enabled = true
-cache_file = "./.duplicate_cache.json"
-
-# Action when duplicate found: "skip", "rename", or "overwrite"
-duplicate_action = "skip"
-
-# Scan folders recursively
-recursive = true
-
-# Only index media files (photos/videos)
-media_only = true
-```
-
-</details>
-
-<details>
-<summary><b>👥 Device Profiles</b></summary>
+#### Device Profiles (Enabled by Default)
 
 ```toml
 [device_profiles]
-enabled = false
-
-# Base folder for all device backups
+enabled = true
 backup_base_folder = "D:/Photos"
-
-# Profile database
-profiles_file = "./.device_profiles.json"
 ```
 
-</details>
+Each device gets its own folder automatically:
+```
+D:/Photos/
+├── Johns_iPhone_15_Pro/
+├── Marys_iPad_Air/
+└── Kids_iPhone_SE/
+```
+
+#### Duplicate Detection
+
+```toml
+[duplicate_detection]
+enabled = true
+comparison_folders = ["D:/Photos/Main Library", "D:/Backups/Old iPhone"]
+duplicate_action = "skip"  # skip, rename, or overwrite
+```
+
+#### Extraction Options
+
+```toml
+[extraction]
+dcim_only = true           # Only extract camera roll
+include_photos = true
+include_videos = true
+```
 
 ---
 
 ## 🔧 Features in Detail
 
+### Multi-Device Support
+
+Device profiles are enabled by default. When you connect different iOS devices, each one automatically gets its own folder:
+
+```
+D:/Photos/
+├── Johns_iPhone_15_Pro/
+│   └── 202511__/
+│       ├── IMG_1234.HEIC
+│       └── IMG_1235.MOV
+├── Marys_iPad_Air/
+│   └── 202510__/
+│       └── IMG_0001.HEIC
+```
+
 ### Incremental Backups
 
-The tool tracks which files have been extracted, so subsequent runs only copy new photos:
+The tool tracks which files have been extracted. Subsequent runs only copy new photos:
 
 ```bash
-# First run: extracts all photos
-photo-extraction-tool -o "D:/Backup"
+# First run: extracts all 1,720 photos
+photo_extraction_tool
+# → Found 1720 photos/videos to extract
+# → Photos extracted: 1720
 
-# Later runs: only extracts new photos
-photo-extraction-tool -o "D:/Backup"
+# Later: only extracts 23 new photos
+photo_extraction_tool
+# → Found 1743 photos/videos to extract  
+# → Photos extracted: 23
+# → Files skipped: 1720
 ```
 
 ### Duplicate Detection
 
-Avoid extracting files you already have elsewhere. Uses SHA256 hashing for exact-match detection — works with both photos AND videos:
+Avoid downloading files you already have. Uses SHA256 hashing for exact-match detection:
 
-**Via Config File:**
-```toml
-[duplicate_detection]
-enabled = true
-comparison_folders = [
-    "D:/Photos/Main Library",
-    "D:/Backups/Old iPhone"
-]
-duplicate_action = "skip"
-```
-
-**Via Command Line:**
 ```bash
-# Enable duplicate detection with one or more comparison folders
-photo-extraction-tool extract --detect-duplicates --compare-to "D:/Photos" --compare-to "E:/Backup"
-
-# Specify what to do with duplicates
-photo-extraction-tool extract --detect-duplicates --compare-to "D:/Photos" --duplicate-action skip
+# Enable with CLI flags
+photo_extraction_tool --detect-duplicates --compare-to "D:/Photos" --compare-to "E:/Backup"
 ```
 
-**How it works:**
+How it works:
 1. Scans comparison folders and computes SHA256 hashes (parallel, cached)
-2. For each file from your device, first checks if any indexed file has the same size (fast rejection)
-3. If sizes match, computes SHA256 hash and checks for exact match
+2. For each device file, checks if any indexed file matches by size first (fast)
+3. If sizes match, computes full SHA256 hash and compares
 4. Takes configured action: skip, rename, or overwrite
 
-The SHA256 algorithm detects exact duplicates reliably and works for any file type.
+### iOS Photo Organization
 
-### Multi-Device Management
+iOS devices organize photos in different ways:
+- **Traditional**: `DCIM/100APPLE/`, `DCIM/101APPLE/`, etc.
+- **Date-based**: `202511__/`, `202510__/`, etc.
 
-Organize photos from multiple devices automatically:
-
-```toml
-[device_profiles]
-enabled = true
-backup_base_folder = "D:/Photos"
-```
-
-Result:
-```
-D:/Photos/
-├── Johns_iPhone_15_Pro/
-│   └── DCIM/...
-├── Marys_iPad_Air/
-│   └── DCIM/...
-└── Kids_iPhone_SE/
-    └── DCIM/...
-```
-
-### Managing Your Configuration
-
-```bash
-# Open config in your default editor
-photo-extraction-tool config
-
-# View current settings
-photo-extraction-tool show-config
-
-# See where the config file is stored
-photo-extraction-tool config --path
-
-# Start fresh with default settings
-photo-extraction-tool config --reset
-```
-
-### Date-Based Organization
-
-Organize photos by when they were taken:
-
-```toml
-[output]
-organize_by_date = true
-```
-
-Result:
-```
-extracted_photos/
-├── 2024/
-│   ├── 01/
-│   │   ├── IMG_0001.jpg
-│   │   └── IMG_0002.heic
-│   ├── 02/
-│   └── 03/
-└── 2023/
-    └── 12/
-```
+This tool automatically detects and handles both structures.
 
 ---
 
@@ -412,77 +278,31 @@ extracted_photos/
 
 ### Device Not Detected
 
-1. **Unlock Your Device**: The iOS device must be unlocked for access
+1. **Unlock Your Device**: iOS devices must be unlocked for access
 2. **Trust the Computer**: Tap "Trust" when prompted on your iPhone/iPad
-3. **Check USB Connection**: Try a different USB cable or port
-4. **Restart the Device**: A restart can resolve connection issues
-5. **Windows Update**: Ensure Windows is up to date (includes USB drivers)
+3. **Check USB Connection**: Try a different cable or port
+4. **Restart Device**: Sometimes a restart resolves connection issues
 
-> **Note**: No iTunes installation or additional drivers are required. Windows 10/11 includes built-in support for iOS devices via the Windows Portable Devices (WPD) API.
+> **Note**: No iTunes or additional drivers required. Windows 10/11 includes built-in support for iOS devices.
 
-### Slow Extraction
+### "No photos found"
 
-- HEIC and large video files take longer to transfer
-- USB 2.0 ports are slower than USB 3.0
-- Consider using `--dry-run` first to see file counts
+- Make sure your device is unlocked
+- Tap "Trust This Computer" if prompted on the device
+- Try running `photo_extraction_tool scan` to see the folder structure
 
 ### Permission Errors
 
-- Run the tool as Administrator if you encounter permission issues
+- Run as Administrator if you encounter permission issues
 - Check that the output directory is writable
 
 ### Common Error Messages
 
 | Error | Solution |
 |-------|----------|
-| "No devices found" | Connect device, unlock it, and tap "Trust" on the device |
-| "Access denied" | Unlock your iOS device or run the tool as Administrator |
-| "Path not found" | Check output directory exists |
-| "Config file not found" | Run `photo_extraction_tool config` to create one |
-
----
-
-## 📁 Project Structure
-
-The project is organized for scalability and to support future UI development:
-
-```
-src/
-├── main.rs              # CLI binary entry point (thin wrapper)
-├── lib.rs               # Library root - exports public API
-├── cli/                 # CLI-specific code
-│   ├── mod.rs           # CLI module exports
-│   ├── args.rs          # Command-line argument definitions
-│   ├── commands.rs      # Command handler implementations
-│   └── progress.rs      # Progress bars and CLI output utilities
-├── core/                # Core business logic
-│   ├── mod.rs           # Core module exports
-│   ├── config.rs        # Configuration types and loading
-│   ├── error.rs         # Error types and result aliases
-│   ├── extractor.rs     # Main extraction logic
-│   └── tracking.rs      # Extraction state and session tracking
-├── device/              # Device interaction
-│   ├── mod.rs           # Device module exports
-│   ├── wpd.rs           # Windows Portable Devices API wrapper
-│   └── profiles.rs      # Device profile management
-└── duplicate/           # Duplicate detection
-    ├── mod.rs           # Duplicate module exports
-    └── detector.rs      # SHA256-based duplicate detection index
-```
-
-### Architecture Overview
-
-- **`lib.rs`** - Library crate that exposes the public API, allowing the core functionality to be reused by other applications (e.g., a future GUI)
-- **`cli/`** - All CLI-specific code is isolated here, making it easy to add alternative interfaces
-- **`core/`** - Business logic that's independent of the interface (config, extraction, tracking)
-- **`device/`** - Hardware interaction layer (WPD API for iOS devices, device profiles)
-- **`duplicate/`** - SHA256-based duplicate detection with size pre-filtering and caching
-
-This separation allows for:
-- Easy addition of a GUI without modifying core logic
-- Reusable library for other Rust projects
-- Clear boundaries between concerns
-- Simplified testing of individual components
+| "No devices found" | Connect device, unlock it, tap "Trust" |
+| "Access denied" | Unlock iOS device or run as Administrator |
+| "Setup required" | Run the tool normally to start setup wizard |
 
 ---
 
@@ -491,89 +311,69 @@ This separation allows for:
 ### Prerequisites
 
 - [Rust](https://rustup.rs/) 1.75 or later
-- Windows 10/11 (uses the Windows Portable Devices API)
+- Windows 10/11
 - Visual Studio Build Tools (for Windows API bindings)
-
-> **Note**: No iTunes or Apple-specific drivers are required. Windows 10/11 includes built-in USB/MTP drivers that work with iOS devices.
 
 ### Build Steps
 
 ```bash
-# Clone the repository
 git clone https://github.com/yourusername/photo-extraction-tool.git
 cd photo-extraction-tool
-
-# Build in release mode
 cargo build --release
-
-# The binary will be at target/release/photo-extraction-tool.exe
+# Binary at: target/release/photo_extraction_tool.exe
 ```
 
 ### Running Tests
 
 ```bash
+# Unit tests
 cargo test
+
+# Test with mock devices (no real device needed)
+cargo run --release -- test run-quick
 ```
 
 ---
 
-## 🖥️ Future: GUI Support
-
-The project structure is designed to support adding a graphical user interface. A future `ui/` module could be added:
+## 📁 Project Structure
 
 ```
 src/
-├── ui/                  # (Future) GUI implementation
-│   ├── mod.rs
-│   ├── app.rs           # Main application window
-│   ├── components/      # Reusable UI components
-│   └── views/           # Different screens/views
+├── main.rs              # CLI entry point
+├── lib.rs               # Library root
+├── cli/                 # CLI-specific code
+│   ├── args.rs          # Argument definitions
+│   ├── commands.rs      # Command handlers
+│   └── progress.rs      # Progress display
+├── core/                # Core business logic
+│   ├── config.rs        # Configuration
+│   ├── setup.rs         # First-run setup wizard
+│   ├── extractor.rs     # Extraction logic
+│   └── tracking.rs      # State tracking
+├── device/              # Device interaction
+│   ├── wpd.rs           # Windows Portable Devices API
+│   └── profiles.rs      # Device profiles
+└── duplicate/           # Duplicate detection
+    └── detector.rs      # SHA256-based detection
 ```
-
-The core library (`lib.rs`) exposes all necessary functionality, so a GUI would simply:
-1. Import the library: `use photo_extraction_tool::core::*;`
-2. Call the same functions the CLI uses
-3. Display progress and results in a graphical interface
 
 ---
 
 ## 🤝 Contributing
 
-Contributions are welcome! Here's how you can help:
+Contributions are welcome! Please:
 
-1. **Fork** the repository
-2. **Create** a feature branch (`git checkout -b feature/amazing-feature`)
-3. **Commit** your changes (`git commit -m 'Add amazing feature'`)
-4. **Push** to the branch (`git push origin feature/amazing-feature`)
-5. **Open** a Pull Request
-
-### Development Guidelines
-
-- Follow Rust conventions and use `cargo fmt`
-- Add tests for new functionality
-- Update documentation as needed
-- Keep commits focused and atomic
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Run `cargo fmt` and `cargo test`
+5. Submit a Pull Request
 
 ---
 
 ## 📄 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
----
-
-## 🙏 Acknowledgments
-
-- Microsoft Windows Portable Devices API documentation
-- The Rust community for excellent crates
-- Contributors and testers
-
----
-
-## 📬 Contact
-
-- **Issues**: [GitHub Issues](https://github.com/yourusername/photo-extraction-tool/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/yourusername/photo-extraction-tool/discussions)
 
 ---
 

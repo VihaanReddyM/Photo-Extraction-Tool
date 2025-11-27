@@ -342,7 +342,7 @@ impl DeviceManagerTrait for DeviceManager {
 
     fn open_device(&self, device_id: &str) -> Result<Self::Content> {
         let portable_device = self.open_device_internal(device_id)?;
-        portable_device.get_content()
+        portable_device.into_content()
     }
 
     fn get_device_info(&self, device_id: &str) -> Option<DeviceInfo> {
@@ -387,13 +387,21 @@ pub struct PortableDevice {
 
 impl PortableDevice {
     /// Get a DeviceContent interface for browsing device contents
-    pub fn get_content(&self) -> Result<DeviceContent> {
+    /// This consumes the PortableDevice to transfer ownership of the IPortableDevice
+    /// to the DeviceContent, ensuring the device stays open while content is accessed.
+    pub fn into_content(self) -> Result<DeviceContent> {
         unsafe {
             let content = self.device.Content().map_err(|e| {
                 ExtractionError::ContentError(format!("Failed to get device content: {}", e))
             })?;
 
-            Ok(DeviceContent::new(content))
+            // Clone the device handle to pass to DeviceContent
+            let device = self.device.clone();
+
+            // Prevent Drop from closing the device - DeviceContent now owns it
+            std::mem::forget(self);
+
+            Ok(DeviceContent::new(content, device))
         }
     }
 }
@@ -411,6 +419,9 @@ impl Drop for PortableDevice {
 /// This is the real WPD implementation that talks to actual connected devices.
 pub struct DeviceContent {
     content: IPortableDeviceContent,
+    /// Keep the device alive for the lifetime of the content
+    /// This prevents the "Shutdown was already called" error
+    _device: IPortableDevice,
     /// Cache of objects for path building
     object_cache: Arc<RwLock<HashMap<String, DeviceObject>>>,
     /// Parent relationships for path building
@@ -424,9 +435,10 @@ unsafe impl Sync for DeviceContent {}
 
 impl DeviceContent {
     /// Create a new DeviceContent wrapper
-    fn new(content: IPortableDeviceContent) -> Self {
+    fn new(content: IPortableDeviceContent, device: IPortableDevice) -> Self {
         Self {
             content,
+            _device: device,
             object_cache: Arc::new(RwLock::new(HashMap::new())),
             parent_cache: Arc::new(RwLock::new(HashMap::new())),
         }
@@ -735,6 +747,15 @@ impl DeviceContentTrait for DeviceContent {
         } else {
             parts.reverse();
             Some(parts.join("/"))
+        }
+    }
+}
+
+impl Drop for DeviceContent {
+    fn drop(&mut self) {
+        unsafe {
+            // Close the device when DeviceContent is dropped
+            let _ = self._device.Close();
         }
     }
 }

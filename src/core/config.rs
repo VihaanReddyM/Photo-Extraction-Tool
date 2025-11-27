@@ -316,8 +316,8 @@ pub struct TrackingConfig {
 impl Default for DeviceProfilesConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
-            backup_base_folder: PathBuf::from("D:/Photos"),
+            enabled: true,
+            backup_base_folder: PathBuf::new(), // Empty = needs setup
             profiles_file: PathBuf::from("./.device_profiles.json"),
             profiles: HashMap::new(),
         }
@@ -327,7 +327,7 @@ impl Default for DeviceProfilesConfig {
 impl Default for OutputConfig {
     fn default() -> Self {
         Self {
-            directory: PathBuf::from("./extracted_photos"),
+            directory: PathBuf::new(), // Empty = needs setup
             preserve_structure: true,
             skip_existing: true,
             organize_by_date: false,
@@ -411,6 +411,45 @@ impl Default for TrackingConfig {
 }
 
 impl Config {
+    /// Check if initial setup is required
+    ///
+    /// Setup is needed if:
+    /// - Device profiles are enabled but backup_base_folder is empty
+    /// - Or output directory is empty and profiles are disabled
+    pub fn needs_setup(&self) -> bool {
+        if self.device_profiles.enabled {
+            // Profiles enabled: need backup_base_folder
+            self.device_profiles
+                .backup_base_folder
+                .as_os_str()
+                .is_empty()
+        } else {
+            // Profiles disabled: need output directory
+            self.output.directory.as_os_str().is_empty()
+        }
+    }
+
+    /// Set up the backup directory (for first-run setup)
+    ///
+    /// This configures both the device profiles backup folder and
+    /// the fallback output directory.
+    pub fn set_backup_directory(&mut self, dir: PathBuf) {
+        self.device_profiles.backup_base_folder = dir.clone();
+        self.output.directory = dir;
+    }
+
+    /// Get the effective output directory
+    ///
+    /// Returns the backup base folder if profiles are enabled,
+    /// otherwise returns the output directory.
+    pub fn get_effective_output_dir(&self) -> &Path {
+        if self.device_profiles.enabled {
+            &self.device_profiles.backup_base_folder
+        } else {
+            &self.output.directory
+        }
+    }
+
     /// Load configuration from a TOML file
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self, ConfigError> {
         let path = path.as_ref();

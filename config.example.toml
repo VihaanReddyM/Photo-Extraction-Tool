@@ -5,8 +5,7 @@
 # ║  photo extraction tool. Modify the settings below to match your preferences.║
 # ║                                                                              ║
 # ║  Config file location:                                                       ║
-# ║    Windows:     %APPDATA%\photo_extraction_tool\config.toml                  ║
-# ║    Linux/macOS: ~/.config/photo_extraction_tool/config.toml                  ║
+# ║    Windows: %APPDATA%\photo_extraction_tool\config.toml                      ║
 # ║                                                                              ║
 # ║  Quick commands:                                                             ║
 # ║    photo_extraction_tool config         - Open this file in your editor     ║
@@ -16,19 +15,45 @@
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 
 # ┌──────────────────────────────────────────────────────────────────────────────┐
+# │                         👥 DEVICE PROFILES SETTINGS                          │
+# └──────────────────────────────────────────────────────────────────────────────┘
+# Device profiles automatically organize photos by device.
+# Each iOS device gets its own folder under the backup directory.
+# This is ENABLED by default - the first run will ask you for a backup location.
+
+[device_profiles]
+
+# Enable device profiles feature (recommended).
+# When enabled, each device will have its own subfolder under backup_base_folder.
+# Example: "D:/Photos/Johns_iPhone_15_Pro/", "D:/Photos/Marys_iPad_Air/"
+enabled = true
+
+# Base folder where all device backups will be stored.
+# This is set during first-time setup. Change it here to move your backup location.
+# IMPORTANT: Leave empty to trigger the setup wizard on first run.
+# Examples:
+#   "D:/Photos"                   - Absolute path on Windows
+#   "C:/Users/John/Pictures/iOS"  - Another example
+backup_base_folder = ""
+
+# Path to the profiles database file.
+# This JSON file stores device information and their folder mappings.
+profiles_file = "./.device_profiles.json"
+
+
+# ┌──────────────────────────────────────────────────────────────────────────────┐
 # │                            📁 OUTPUT SETTINGS                                │
 # └──────────────────────────────────────────────────────────────────────────────┘
+# These settings are used as fallback when device_profiles.enabled = false,
+# or when you use the --output CLI flag to override the destination.
+
 [output]
 
-# Directory where photos will be extracted to.
-# Use forward slashes (/) or double backslashes (\\) for Windows paths.
-# Examples:
-#   "./extracted_photos"          - Relative to current directory
-#   "D:/Photos/iOS Backup"        - Absolute path on Windows
-#   "/home/user/Photos"           - Absolute path on Linux/macOS
-directory = "./extracted_photos"
+# Fallback directory for extracted photos (when profiles are disabled).
+# When device_profiles is enabled, backup_base_folder is used instead.
+directory = ""
 
-# Preserve the folder structure from the device (e.g., DCIM/100APPLE/IMG_0001.jpg)
+# Preserve the folder structure from the device (e.g., 202511__/IMG_0001.HEIC)
 # Set to `false` to extract all photos into a single flat directory.
 preserve_structure = true
 
@@ -42,7 +67,7 @@ skip_existing = true
 # Note: This overrides preserve_structure when enabled.
 organize_by_date = false
 
-# Create a subfolder named after the device.
+# Create a subfolder named after the device (only when profiles are disabled).
 # Example: "extracted_photos/Johns_iPhone_15/..."
 subfolder_by_device = false
 
@@ -58,7 +83,7 @@ subfolder_by_device = false
 
 # Specific device ID to use for extraction.
 # Leave commented out for auto-detection (recommended for most users).
-# Use `--list-devices` command to find your device ID.
+# Use `photo_extraction_tool list` command to find your device ID.
 # device_id = "\\\\?\\usb#vid_05ac&pid_12a8#..."
 
 # Filter devices by name (partial match, case-insensitive).
@@ -80,8 +105,10 @@ apple_only = true
 # └──────────────────────────────────────────────────────────────────────────────┘
 [extraction]
 
-# Only extract from the DCIM folder (Camera Roll).
+# Only extract from DCIM/photo folders.
 # Set to `false` to scan the entire device storage (may include app data, etc.)
+# Note: iOS devices may organize photos in date-based folders (202511__, etc.)
+#       instead of traditional DCIM - the tool handles both automatically.
 dcim_only = true
 
 # File extensions to INCLUDE in extraction.
@@ -186,32 +213,7 @@ recursive = true
 
 # Only index media files (photos and videos).
 # Set to `false` to index ALL files regardless of extension.
-# Supported media extensions: jpg, jpeg, png, gif, webp, bmp, tiff, tif, heic,
-#                             heif, raw, cr2, nef, arw, dng, mp4, mov, avi,
-#                             mkv, m4v, 3gp, wmv, flv, webm
 media_only = true
-
-
-# ┌──────────────────────────────────────────────────────────────────────────────┐
-# │                         👥 DEVICE PROFILES SETTINGS                          │
-# └──────────────────────────────────────────────────────────────────────────────┘
-# Device profiles automatically organize photos by device.
-# Each device gets its own folder, making it easy to back up multiple phones.
-
-[device_profiles]
-
-# Enable device profiles feature.
-# When enabled, each device will have its own subfolder under backup_base_folder.
-# This overrides output.directory for organizing photos.
-enabled = false
-
-# Base folder where device subfolders will be created.
-# Example: If set to "D:/Photos", your iOS device photos go to "D:/Photos/Device_Name/"
-backup_base_folder = "D:/Photos"
-
-# Path to the profiles database file.
-# This JSON file stores device information and their folder mappings.
-profiles_file = "./.device_profiles.json"
 
 
 # ┌──────────────────────────────────────────────────────────────────────────────┐
@@ -240,24 +242,25 @@ track_extracted_files = true
 # ║                              QUICK START GUIDE                               ║
 # ╠══════════════════════════════════════════════════════════════════════════════╣
 # ║                                                                              ║
-# ║  1. Edit this file using: photo_extraction_tool config                       ║
+# ║  FIRST TIME SETUP:                                                           ║
+# ║    Just run: photo_extraction_tool                                           ║
+# ║    The setup wizard will guide you through choosing a backup location.       ║
 # ║                                                                              ║
-# ║  2. Basic backup (most users):                                               ║
-# ║     - Set output.directory to your preferred backup location                 ║
-# ║     - Leave other settings at defaults                                       ║
+# ║  AFTER SETUP:                                                                ║
+# ║    1. Connect your iPhone/iPad via USB                                       ║
+# ║    2. Unlock the device and tap "Trust" if prompted                          ║
+# ║    3. Run: photo_extraction_tool                                             ║
 # ║                                                                              ║
-# ║  3. Multiple devices:                                                        ║
-# ║     - Enable device_profiles.enabled = true                                  ║
-# ║     - Set device_profiles.backup_base_folder                                 ║
+# ║  MULTIPLE DEVICES:                                                           ║
+# ║    Device profiles are enabled by default. Each device gets its own          ║
+# ║    folder automatically (e.g., D:/Photos/Johns_iPhone_15/)                   ║
 # ║                                                                              ║
-# ║  4. Avoid duplicates:                                                        ║
-# ║     - Enable duplicate_detection.enabled = true                              ║
-# ║     - Add existing photo folders to comparison_folders                       ║
-# ║     - Or use CLI: --detect-duplicates --compare-to "D:/Photos"               ║
+# ║  AVOID DUPLICATES:                                                           ║
+# ║    Enable duplicate_detection.enabled = true above                           ║
+# ║    Add your existing photo folders to comparison_folders                     ║
+# ║    Or use CLI: --detect-duplicates --compare-to "D:/Photos"                  ║
 # ║                                                                              ║
-# ║  5. Photos only (no videos):                                                 ║
-# ║     - Set extraction.include_videos = false                                  ║
-# ║                                                                              ║
-# ║  After editing, save this file. Changes apply on the next run.               ║
+# ║  EDIT THIS FILE:                                                             ║
+# ║    Run: photo_extraction_tool config                                         ║
 # ║                                                                              ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
