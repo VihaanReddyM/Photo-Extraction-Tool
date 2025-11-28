@@ -4,7 +4,8 @@
 //! It prompts the user for essential settings like the backup directory and
 //! sets up device profiles. This is designed to work with both CLI and future UI.
 
-use crate::core::config::{ensure_config_dir, get_config_path, Config};
+use crate::core::config::{ensure_config_dir, get_config_path, Config, TrackingConfig};
+use crate::core::tracking::scan_for_profiles;
 use crate::device::{self, DeviceInfo, DeviceManagerTrait, ProfileManager};
 use log::info;
 use std::fs;
@@ -92,11 +93,17 @@ pub fn run_setup_wizard(existing_config: Option<Config>) -> io::Result<SetupResu
         }
     }
 
+    // Step 2: Scan for existing profiles in the selected directory
+    let selected_dir = scan_and_prompt_for_existing_profiles(&backup_dir)?;
+
+    // Use the selected directory (might be a profile subfolder)
+    let backup_dir = selected_dir;
+
     // Apply settings
     config.set_backup_directory(backup_dir.clone());
     config.device_profiles.enabled = true;
 
-    // Step 2: Try to detect connected device
+    // Step 3: Try to detect connected device
     println!();
     println!("Checking for connected iOS devices...");
 
@@ -124,7 +131,7 @@ pub fn run_setup_wizard(existing_config: Option<Config>) -> io::Result<SetupResu
         }
     }
 
-    // Step 3: Save configuration
+    // Step 4: Save configuration
     println!();
     println!("Saving configuration...");
 
@@ -137,7 +144,7 @@ pub fn run_setup_wizard(existing_config: Option<Config>) -> io::Result<SetupResu
         }
     }
 
-    // Step 4: Initialize empty profiles in backup directory
+    // Step 5: Initialize empty profiles in backup directory
     // This creates the device_profiles.json in the backup folder
     let mut profile_manager = ProfileManager::new(&config.device_profiles);
     if let Err(e) = profile_manager.ensure_backup_synced() {
@@ -173,23 +180,130 @@ pub fn run_setup_wizard(existing_config: Option<Config>) -> io::Result<SetupResu
     })
 }
 
-/// Prompt for backup directory with suggestions
-fn prompt_for_backup_directory() -> io::Result<PathBuf> {
-    // Generate suggestions based on common locations
-    let suggestions = get_directory_suggestions();
+/// Scan for existing profiles and prompt user to select one
+///
+/// If existing extraction profiles are found in the directory (or its subdirectories),
+/// the user is asked whether they want to use one of them.
+fn scan_and_prompt_for_existing_profiles(backup_dir: &PathBuf) -> io::Result<PathBuf> {
+    let tracking_config = TrackingConfig::default();
+    let profiles = scan_for_profiles(backup_dir, &tracking_config.tracking_filename);
 
-    println!("Where would you like to save your photos?");
+    if profiles.is_empty() {
+        // No existing profiles found, use the directory as-is
+        return Ok(backup_dir.clone());
+    }
+
+    println!();
+    println!("╔══════════════════════════════════════════════════════════════════╗");
+    println!("║              📁 Existing Profiles Found!                         ║");
+    println!("╚══════════════════════════════════════════════════════════════════╝");
+    println!();
+    println!(
+        "Found {} existing extraction profile(s) in this location:",
+        profiles.len()
+    );
     println!();
 
-    if !suggestions.is_empty() {
-        println!("Suggested locations:");
-        for (i, suggestion) in suggestions.iter().enumerate() {
-            println!("  [{}] {}", i + 1, suggestion.display());
-        }
+    for (i, profile) in profiles.iter().enumerate() {
+        let path_display = if profile.path == *backup_dir {
+            "(root directory)".to_string()
+        } else {
+            profile
+                .path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| profile.path.display().to_string())
+        };
+
+        println!("  [{}] {} - {}", i + 1, profile.friendly_name, path_display);
+        println!(
+            "      {} files extracted, {} sessions, last used: {}",
+            profile.total_files_extracted,
+            profile.total_sessions,
+            profile.last_seen.format("%Y-%m-%d %H:%M")
+        );
         println!();
     }
 
-    println!("Enter a path or number from above (or press Enter for default):");
+    println!("  [0] Start fresh (don't use any existing profile)");
+    println!();
+    println!("Enter a number to continue with that profile, or 0 to start fresh:");
+    print!("> ");
+    io::stdout().flush()?;
+
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    let input = input.trim();
+
+    if input.is_empty() || input == "0" {
+        println!("✓ Starting fresh in: {}", backup_dir.display());
+        return Ok(backup_dir.clone());
+    }
+
+    if let Ok(num) = input.parse::<usize>() {
+        if num > 0 && num <= profiles.len() {
+            let selected = &profiles[num - 1];
+            println!(
+                "✓ Using existing profile: {} ({})",
+                selected.friendly_name,
+                selected.path.display()
+            );
+            return Ok(selected.path.clone());
+        }
+    }
+
+    // Invalid input, default to the original directory
+    println!(
+        "Invalid selection. Starting fresh in: {}",
+        backup_dir.display()
+    );
+    Ok(backup_dir.clone())
+}
+
+/// Normalize a path string to handle both `/` and `\` separators
+///
+/// This function ensures paths work correctly regardless of which separator
+/// the user types. On Windows, forward slashes are converted to backslashes.
+/// On Unix, backslashes are converted to forward slashes.
+///
+/// # Examples
+///
+/// ```
+/// use photo_extraction_tool::core::setup::normalize_path;
+///
+/// // On Windows, these all become the same path:
+/// let path1 = normalize_path("C:/Users/User/Photos");
+/// let path2 = normalize_path("C:\\Users\\User\\Photos");
+/// // Both result in: C:\Users\User\Photos
+///
+/// // On Unix:
+/// let path3 = normalize_path("/home/user/photos");
+/// let path4 = normalize_path("\\home\\user\\photos");
+/// // Both result in: /home/user/photos
+/// ```
+pub fn normalize_path(input: &str) -> PathBuf {
+    #[cfg(windows)]
+    {
+        // On Windows, normalize forward slashes to backslashes
+        PathBuf::from(input.replace('/', "\\"))
+    }
+    #[cfg(not(windows))]
+    {
+        // On Unix, normalize backslashes to forward slashes
+        PathBuf::from(input.replace('\\', "/"))
+    }
+}
+
+/// Prompt for backup directory with suggestions
+fn prompt_for_backup_directory() -> io::Result<PathBuf> {
+    // Get a sensible default path
+    let default_path = get_default_backup_path();
+
+    println!("Where would you like to save your photos?");
+    println!();
+    println!("Default: {}", default_path.display());
+    println!();
+    println!("Enter a path (or press Enter to use default):");
     print!("> ");
     io::stdout().flush()?;
 
@@ -199,57 +313,29 @@ fn prompt_for_backup_directory() -> io::Result<PathBuf> {
 
     // Parse input
     let path = if input.is_empty() {
-        // Default to first suggestion or Documents/Photos
-        suggestions.first().cloned().unwrap_or_else(|| {
-            dirs::document_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join("iOS Photos")
-        })
-    } else if let Ok(num) = input.parse::<usize>() {
-        // User selected a number
-        if num > 0 && num <= suggestions.len() {
-            suggestions[num - 1].clone()
-        } else {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("Invalid selection: {}", num),
-            ));
-        }
+        default_path
     } else {
-        // User entered a path
-        PathBuf::from(input)
+        // Normalize path separators (handle both / and \)
+        normalize_path(input)
     };
 
     Ok(path)
 }
 
-/// Get suggested backup directories
-fn get_directory_suggestions() -> Vec<PathBuf> {
-    let mut suggestions = Vec::new();
-
-    // Pictures folder
+/// Get the default backup path
+fn get_default_backup_path() -> PathBuf {
+    // Try Pictures folder first
     if let Some(pictures) = dirs::picture_dir() {
-        suggestions.push(pictures.join("iOS Backup"));
+        return pictures.join("iOS Backup");
     }
 
-    // Documents folder
+    // Fall back to Documents
     if let Some(docs) = dirs::document_dir() {
-        suggestions.push(docs.join("iOS Photos"));
+        return docs.join("iOS Photos");
     }
 
-    // Common external drives on Windows (D:, E:, F:)
-    #[cfg(target_os = "windows")]
-    {
-        for drive in ['D', 'E', 'F'] {
-            let drive_path = PathBuf::from(format!("{}:\\Photos", drive));
-            let drive_root = PathBuf::from(format!("{}:\\", drive));
-            if drive_root.exists() {
-                suggestions.push(drive_path);
-            }
-        }
-    }
-
-    suggestions
+    // Last resort
+    PathBuf::from("./iOS Photos")
 }
 
 /// Programmatic setup (for UI integration)

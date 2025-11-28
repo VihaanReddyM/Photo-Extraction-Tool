@@ -5,6 +5,20 @@
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
+/// Parse a path string, normalizing separators for the current platform
+///
+/// Handles both `/` and `\` as path separators regardless of OS.
+fn parse_path(s: &str) -> Result<PathBuf, String> {
+    #[cfg(windows)]
+    {
+        Ok(PathBuf::from(s.replace('/', "\\")))
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(PathBuf::from(s.replace('\\', "/")))
+    }
+}
+
 /// A fast, reliable tool to extract photos from iOS devices (iPhone/iPad) on Windows
 #[derive(Parser, Debug)]
 #[command(name = "photo_extraction_tool")]
@@ -16,11 +30,11 @@ pub struct Args {
     pub command: Option<Commands>,
 
     /// Path to configuration file
-    #[arg(short, long, global = true)]
+    #[arg(short, long, global = true, value_parser = parse_path)]
     pub config: Option<PathBuf>,
 
     /// Output directory for extracted photos (overrides config)
-    #[arg(short, long)]
+    #[arg(short, long, value_parser = parse_path)]
     pub output: Option<PathBuf>,
 
     /// Device ID to extract from (overrides config)
@@ -44,7 +58,7 @@ pub struct Args {
     pub detect_duplicates: bool,
 
     /// Folder(s) to compare against for duplicates (can be specified multiple times)
-    #[arg(long = "compare-to", value_name = "FOLDER")]
+    #[arg(long = "compare-to", value_name = "FOLDER", value_parser = parse_path)]
     pub compare_folders: Vec<PathBuf>,
 
     /// Action to take when a duplicate is found: skip, rename, or overwrite
@@ -69,7 +83,7 @@ pub enum Commands {
         detect_duplicates: bool,
 
         /// Folder(s) to compare against for duplicates (can be specified multiple times)
-        #[arg(long = "compare-to", value_name = "FOLDER")]
+        #[arg(long = "compare-to", value_name = "FOLDER", value_parser = parse_path)]
         compare_folders: Vec<PathBuf>,
 
         /// Action to take when a duplicate is found: skip, rename, or overwrite
@@ -104,7 +118,7 @@ pub enum Commands {
     /// Generate a configuration file at a specific location
     GenerateConfig {
         /// Output path for the config file (defaults to standard location)
-        #[arg(short, long)]
+        #[arg(short, long, value_parser = parse_path)]
         output: Option<PathBuf>,
     },
 
@@ -120,6 +134,17 @@ pub enum Commands {
 
     /// List all configured device profiles
     ListProfiles,
+
+    /// Scan a directory for existing extraction profiles
+    ///
+    /// This scans the specified directory (or the configured backup directory)
+    /// for subdirectories containing extraction state files, showing details
+    /// about each discovered profile.
+    ScanProfiles {
+        /// Directory to scan (defaults to configured backup directory)
+        #[arg(short, long, value_parser = parse_path)]
+        directory: Option<PathBuf>,
+    },
 
     /// Remove a device profile
     RemoveProfile {
@@ -159,7 +184,7 @@ pub enum TestCommands {
         json_report: bool,
 
         /// Output directory for reports
-        #[arg(short, long)]
+        #[arg(short, long, value_parser = parse_path)]
         output: Option<PathBuf>,
 
         /// Stop on first failure
@@ -231,7 +256,7 @@ pub enum TestCommands {
         scenario: String,
 
         /// Output directory for extracted files
-        #[arg(short, long)]
+        #[arg(short, long, value_parser = parse_path)]
         output: PathBuf,
 
         /// Include progress bar and verbose output
@@ -249,7 +274,7 @@ pub enum TestCommands {
     /// for use in testing duplicate detection and other features.
     GenerateData {
         /// Output directory for generated files
-        #[arg(short, long)]
+        #[arg(short, long, value_parser = parse_path)]
         output: PathBuf,
 
         /// Number of files to generate

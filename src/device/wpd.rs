@@ -24,7 +24,8 @@ use windows::{
             IPortableDeviceValues, PortableDeviceFTM, PortableDeviceKeyCollection,
             PortableDeviceManager, PortableDeviceValues, WPD_CLIENT_MAJOR_VERSION,
             WPD_CLIENT_MINOR_VERSION, WPD_CLIENT_NAME, WPD_CLIENT_REVISION,
-            WPD_CLIENT_SECURITY_QUALITY_OF_SERVICE, WPD_OBJECT_CONTENT_TYPE, WPD_OBJECT_NAME,
+            WPD_CLIENT_SECURITY_QUALITY_OF_SERVICE, WPD_OBJECT_CONTENT_TYPE,
+            WPD_OBJECT_DATE_CREATED, WPD_OBJECT_DATE_MODIFIED, WPD_OBJECT_NAME,
             WPD_OBJECT_ORIGINAL_FILE_NAME, WPD_OBJECT_SIZE, WPD_RESOURCE_DEFAULT,
         },
         System::Com::{
@@ -243,7 +244,7 @@ impl DeviceManager {
                     }
                 })?;
 
-            info!("Successfully opened device: {}", device_id);
+            debug!("Successfully opened device: {}", device_id);
 
             Ok(PortableDevice {
                 device,
@@ -482,13 +483,23 @@ impl DeviceContent {
                 .GetUnsignedLargeIntegerValue(&WPD_OBJECT_SIZE)
                 .unwrap_or(0);
 
+            // Get date modified (try modified first, then created)
+            // WPD returns dates as PROPVARIANT containing FILETIME
+            let date_modified = self
+                .get_date_value(values, &WPD_OBJECT_DATE_MODIFIED)
+                .or_else(|| self.get_date_value(values, &WPD_OBJECT_DATE_CREATED));
+
+            if date_modified.is_some() {
+                trace!("Object '{}' date: {:?}", name, date_modified);
+            }
+
             DeviceObject {
                 object_id: object_id.to_string(),
                 parent_id: parent_id.to_string(),
                 name,
                 is_folder,
                 size,
-                date_modified: None,
+                date_modified,
                 content_type: None,
             }
         }
@@ -511,6 +522,113 @@ impl DeviceContent {
         }
     }
 
+    /// Get a date value from IPortableDeviceValues and convert to ISO 8601 string
+    fn get_date_value(
+        &self,
+        values: &IPortableDeviceValues,
+        key: &windows::Win32::UI::Shell::PropertiesSystem::PROPERTYKEY,
+    ) -> Option<String> {
+        unsafe {
+            // WPD dates are typically stored as FILETIME in a PROPVARIANT
+            // The windows crate wraps PROPVARIANT, but we can access the raw data
+
+            // Try reading the value - if it fails, the property doesn't exist
+            let propvar = match values.GetValue(key) {
+                Ok(pv) => pv,
+                Err(_) => return None,
+            };
+
+            // Access the raw PROPVARIANT data through its memory layout
+            // PROPVARIANT structure: vt (2 bytes), wReserved1-3 (6 bytes), then data (8+ bytes)
+            let propvar_ptr = &propvar as *const _ as *const u8;
+
+            // Read the variant type (first 2 bytes)
+            let vt = std::ptr::read_unaligned(propvar_ptr as *const u16);
+
+            // VT_FILETIME = 64
+            const VT_FILETIME: u16 = 64;
+            // VT_DATE = 7
+            const VT_DATE: u16 = 7;
+
+            if vt == VT_FILETIME {
+                // FILETIME starts at offset 8 in PROPVARIANT
+                let ft_ptr = propvar_ptr.add(8) as *const windows::Win32::Foundation::FILETIME;
+                let ft = std::ptr::read_unaligned(ft_ptr);
+                return Self::filetime_to_iso8601(ft);
+            } else if vt == VT_DATE {
+                // OLE DATE (f64) starts at offset 8
+                let date_ptr = propvar_ptr.add(8) as *const f64;
+                let date = std::ptr::read_unaligned(date_ptr);
+                return Self::oledate_to_iso8601(date);
+            }
+
+            // Try reading as string as fallback (some devices store dates as strings)
+            if let Ok(date_str) = self.get_string_value(values, key) {
+                if !date_str.is_empty() {
+                    // Check if it looks like a date string
+                    if date_str.contains('-') || date_str.contains('/') || date_str.contains(':') {
+                        return Some(date_str);
+                    }
+                }
+            }
+
+            trace!(
+                "Found date property with vt={} but couldn't extract value",
+                vt
+            );
+            None
+        }
+    }
+
+    /// Convert FILETIME to ISO 8601 string
+    fn filetime_to_iso8601(ft: windows::Win32::Foundation::FILETIME) -> Option<String> {
+        // FILETIME is 100-nanosecond intervals since January 1, 1601
+        let ft_value = ((ft.dwHighDateTime as u64) << 32) | (ft.dwLowDateTime as u64);
+
+        if ft_value == 0 {
+            return None;
+        }
+
+        // Convert to Unix timestamp (seconds since 1970-01-01)
+        // FILETIME epoch is 1601-01-01, Unix epoch is 1970-01-01
+        // Difference is 11644473600 seconds
+        const FILETIME_UNIX_DIFF: u64 = 116444736000000000;
+
+        if ft_value < FILETIME_UNIX_DIFF {
+            return None;
+        }
+
+        let unix_100ns = ft_value - FILETIME_UNIX_DIFF;
+        let unix_secs = (unix_100ns / 10_000_000) as i64;
+
+        // Use chrono to format as ISO 8601
+        use chrono::{TimeZone, Utc};
+        Utc.timestamp_opt(unix_secs, 0)
+            .single()
+            .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string())
+    }
+
+    /// Convert OLE Automation date to ISO 8601 string
+    fn oledate_to_iso8601(date: f64) -> Option<String> {
+        if date == 0.0 {
+            return None;
+        }
+
+        // OLE date is days since December 30, 1899
+        // Convert to Unix timestamp
+        use chrono::{TimeZone, Utc};
+
+        // December 30, 1899 in Unix time is -2209161600 seconds
+        const OLE_EPOCH_UNIX: i64 = -2209161600;
+        const SECONDS_PER_DAY: i64 = 86400;
+
+        let unix_secs = OLE_EPOCH_UNIX + (date * SECONDS_PER_DAY as f64) as i64;
+
+        Utc.timestamp_opt(unix_secs, 0)
+            .single()
+            .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string())
+    }
+
     /// Cache an object and its parent relationship
     fn cache_object(&self, object: &DeviceObject) {
         if let Ok(mut cache) = self.object_cache.write() {
@@ -528,7 +646,7 @@ impl DeviceContentTrait for DeviceContent {
         let objects = self.enumerate_children("DEVICE")?;
 
         for obj in &objects {
-            info!(
+            debug!(
                 "Root object: '{}' (id: {}, folder: {}, size: {})",
                 obj.name, obj.object_id, obj.is_folder, obj.size
             );
@@ -572,6 +690,8 @@ impl DeviceContentTrait for DeviceContent {
             keys_to_read.Add(&WPD_OBJECT_ORIGINAL_FILE_NAME)?;
             keys_to_read.Add(&WPD_OBJECT_CONTENT_TYPE)?;
             keys_to_read.Add(&WPD_OBJECT_SIZE)?;
+            keys_to_read.Add(&WPD_OBJECT_DATE_MODIFIED)?;
+            keys_to_read.Add(&WPD_OBJECT_DATE_CREATED)?;
 
             let mut objects = Vec::new();
             let batch_size = 100u32;

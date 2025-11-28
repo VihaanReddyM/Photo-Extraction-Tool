@@ -4,9 +4,12 @@
 
 use crate::cli::progress::{BenchmarkProgress, ScanProgressTracker};
 use crate::cli::{Args, Commands, TestCommands};
-use crate::core::config::{get_config_path, init_config, open_config_in_editor, Config};
+use crate::core::config::{
+    get_config_path, init_config, open_config_in_editor, Config, TrackingConfig,
+};
 use crate::core::extractor;
 use crate::core::setup::run_setup_wizard;
+use crate::core::tracking::scan_for_profiles;
 use crate::device::traits::{DeviceContentTrait, DeviceManagerTrait};
 use crate::device::{self, ProfileManager};
 use crate::testdb::{
@@ -72,6 +75,9 @@ pub fn run_command(args: &Args, config: &Config, shutdown_flag: Arc<AtomicBool>)
         }
         Some(Commands::ListProfiles) => {
             list_profiles(&config)?;
+        }
+        Some(Commands::ScanProfiles { directory }) => {
+            scan_profiles(&config, directory.clone())?;
         }
         Some(Commands::RemoveProfile { name }) => {
             remove_profile(&config, name)?;
@@ -197,6 +203,102 @@ pub fn list_profiles(config: &Config) -> Result<()> {
     manager.load().ok();
     manager.list_profiles();
     Ok(())
+}
+
+/// Scan a directory for existing extraction profiles
+///
+/// This scans the specified directory (or configured backup directory) for
+/// subdirectories containing extraction state files (.photo_extraction_state.json).
+pub fn scan_profiles(config: &Config, directory: Option<PathBuf>) -> Result<()> {
+    let scan_dir = directory.unwrap_or_else(|| config.device_profiles.backup_base_folder.clone());
+
+    if scan_dir.as_os_str().is_empty() {
+        error!("No directory specified and no backup directory configured.");
+        error!("Run setup first or specify a directory with --directory");
+        return Ok(());
+    }
+
+    if !scan_dir.exists() {
+        error!("Directory does not exist: {}", scan_dir.display());
+        return Ok(());
+    }
+
+    info!(
+        "Scanning for extraction profiles in: {}",
+        scan_dir.display()
+    );
+    println!();
+
+    let tracking_config = TrackingConfig::default();
+    let profiles = scan_for_profiles(&scan_dir, &tracking_config.tracking_filename);
+
+    if profiles.is_empty() {
+        println!("No extraction profiles found in this directory.");
+        println!();
+        println!("Extraction profiles are created when you extract photos from a device.");
+        println!(
+            "Each profile contains a {} file with extraction history.",
+            tracking_config.tracking_filename
+        );
+        return Ok(());
+    }
+
+    println!("╔══════════════════════════════════════════════════════════════════╗");
+    println!(
+        "║              📁 Found {} Extraction Profile(s)                    ║",
+        profiles.len()
+    );
+    println!("╚══════════════════════════════════════════════════════════════════╝");
+    println!();
+
+    for (i, profile) in profiles.iter().enumerate() {
+        let path_display = if profile.path == scan_dir {
+            "(root directory)".to_string()
+        } else {
+            profile.path.display().to_string()
+        };
+
+        println!("{}. {}", i + 1, profile.friendly_name);
+        println!(
+            "   ├─ Device:    {} {}",
+            profile.manufacturer, profile.model
+        );
+        println!("   ├─ Location:  {}", path_display);
+        println!(
+            "   ├─ Files:     {} extracted ({})",
+            profile.total_files_extracted,
+            format_bytes(profile.total_bytes_extracted)
+        );
+        println!("   ├─ Sessions:  {}", profile.total_sessions);
+        println!(
+            "   ├─ First use: {}",
+            profile.first_seen.format("%Y-%m-%d %H:%M")
+        );
+        println!(
+            "   └─ Last use:  {}",
+            profile.last_seen.format("%Y-%m-%d %H:%M")
+        );
+        println!();
+    }
+
+    Ok(())
+}
+
+/// Format bytes into human-readable format
+fn format_bytes(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+
+    if bytes >= GB {
+        format!("{:.2} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.2} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.2} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{} B", bytes)
+    }
 }
 
 /// Remove a device profile by name or partial ID
@@ -587,7 +689,7 @@ pub fn extract_photos_with_args(
     // Create device manager
     let manager = device::DeviceManager::new()?;
 
-    info!("Scanning for connected devices...");
+    debug!("Scanning for connected devices...");
 
     let devices = if config.device.apple_only {
         manager.enumerate_apple_devices()?
@@ -596,21 +698,22 @@ pub fn extract_photos_with_args(
     };
 
     if devices.is_empty() {
-        error!("No portable devices found.");
-        error!("");
-        error!("Make sure your iPhone is:");
-        error!("  1. Connected via USB cable");
-        error!("  2. Unlocked");
-        error!("  3. Trusting this computer (tap 'Trust' when prompted)");
-        error!("");
-        error!("Use 'list' command to see available devices");
-        error!("Use '--all-devices' to see all portable devices (not just Apple)");
+        println!();
+        println!("  ✗ No portable devices found.");
+        println!();
+        println!("  Make sure your iPhone is:");
+        println!("    1. Connected via USB cable");
+        println!("    2. Unlocked");
+        println!("    3. Trusting this computer (tap 'Trust' when prompted)");
+        println!();
+        println!("  Use 'list' command to see available devices");
+        println!("  Use '--all-devices' to see all portable devices (not just Apple)");
         return Ok(());
     }
 
     // Select device
     let target_device = select_device(&devices, &config.device.device_id)?;
-    info!("Selected device: {}", target_device.friendly_name);
+    debug!("Selected device: {}", target_device.friendly_name);
 
     // Determine output directory - use device profiles if enabled
     let output_dir = if config.device_profiles.enabled {
@@ -623,7 +726,7 @@ pub fn extract_photos_with_args(
             .backup_base_folder
             .join(&profile.output_folder);
 
-        info!(
+        debug!(
             "Using profile '{}' -> {}",
             profile.name,
             output_path.display()
@@ -636,7 +739,7 @@ pub fn extract_photos_with_args(
     // Create output directory if it doesn't exist
     if !output_dir.exists() {
         std::fs::create_dir_all(&output_dir)?;
-        info!("Created output directory: {}", output_dir.display());
+        debug!("Created output directory: {}", output_dir.display());
     }
 
     // Convert config to extraction config
@@ -657,7 +760,7 @@ pub fn extract_photos_with_args(
         };
 
         if !folders.is_empty() {
-            info!(
+            debug!(
                 "Duplicate detection enabled, comparing against {} folder(s)",
                 folders.len()
             );
@@ -671,7 +774,7 @@ pub fn extract_photos_with_args(
                 media_only: config.duplicate_detection.media_only,
             })
         } else {
-            warn!("Duplicate detection requested but no comparison folders specified");
+            debug!("Duplicate detection requested but no comparison folders specified");
             None
         }
     } else if config.duplicate_detection.enabled {
@@ -695,24 +798,15 @@ pub fn extract_photos_with_args(
 
     let stats = extractor::extract_photos(target_device, extraction_config, shutdown_flag.clone())?;
 
-    // Check if we were interrupted
-    if shutdown_flag.load(Ordering::SeqCst) {
-        warn!("Extraction was interrupted by user");
-    }
-
-    info!("============================");
-    info!("Extraction complete!");
-    info!("  Photos extracted: {}", stats.files_extracted);
-    info!("  Files skipped: {}", stats.files_skipped);
-    info!("  Duplicates skipped: {}", stats.duplicates_skipped);
-    info!("  Duplicates overwritten: {}", stats.duplicates_overwritten);
-    info!("  Duplicates renamed: {}", stats.duplicates_renamed);
-    info!("  Errors: {}", stats.errors);
-    info!(
-        "  Total size: {:.2} MB",
-        stats.total_bytes as f64 / 1_048_576.0
+    // Log summary at debug level for troubleshooting (user-facing output is in extractor)
+    debug!(
+        "Extraction finished: {} extracted, {} skipped, {} duplicates, {} errors, {} bytes",
+        stats.files_extracted,
+        stats.files_skipped,
+        stats.duplicates_skipped,
+        stats.errors,
+        stats.total_bytes
     );
-    info!("  Output: {}", output_dir.display());
 
     Ok(())
 }

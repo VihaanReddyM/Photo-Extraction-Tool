@@ -48,6 +48,7 @@ pub use generic_extractor::{
     GenericExtractor, ProgressUpdate,
 };
 pub use setup::{
-    apply_setup, is_setup_complete, run_setup_wizard, SetupError, SetupOptions, SetupResult,
+    apply_setup, is_setup_complete, normalize_path, run_setup_wizard, SetupError, SetupOptions,
+    SetupResult,
 };
-pub use tracking::StateTracker;
+pub use tracking::{scan_for_profiles, scan_for_profiles_default, ProfileSummary, StateTracker};

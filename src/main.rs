@@ -18,7 +18,7 @@ use clap::Parser;
 use cli::{Args, DualWriter};
 use core::config::Config;
 use env_logger::Builder;
-use log::{info, LevelFilter};
+use log::{debug, info, LevelFilter};
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -121,8 +121,9 @@ fn main() -> Result<()> {
             .init();
     }
 
-    info!("Photo Extraction Tool v1.0.0");
-    info!("============================");
+    // Only show startup banner at debug level to reduce noise
+    debug!("Photo Extraction Tool v1.0.0");
+    debug!("============================");
 
     // Run the command
     cli::run_command(&args, &config, shutdown_flag)?;

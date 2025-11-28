@@ -9,8 +9,9 @@
 //!
 //! Some accessor methods are kept for API completeness and future use.
 
-use crate::core::config::{DeviceProfile, DeviceProfilesConfig};
+use crate::core::config::{DeviceProfile, DeviceProfilesConfig, TrackingConfig};
 use crate::core::error::{ExtractionError, Result};
+use crate::core::tracking::scan_for_profiles;
 use crate::device::DeviceInfo;
 use chrono::Utc;
 use dialoguer::{Confirm, Input};
@@ -90,7 +91,7 @@ impl ProfileManager {
             ExtractionError::IoError(format!("Failed to parse profiles file: {}", e))
         })?;
 
-        info!(
+        debug!(
             "Loaded {} device profile(s) from {}",
             self.database.profiles.len(),
             self.config.profiles_file.display()
@@ -136,7 +137,7 @@ impl ProfileManager {
             ExtractionError::IoError(format!("Failed to write profiles file: {}", e))
         })?;
 
-        info!(
+        debug!(
             "Saved {} device profile(s) to {}",
             self.database.profiles.len(),
             self.config.profiles_file.display()
@@ -212,7 +213,7 @@ impl ProfileManager {
     pub fn get_or_create_profile(&mut self, device: &DeviceInfo) -> Result<DeviceProfile> {
         // Check if we already have a profile for this device
         if let Some(mut profile) = self.database.profiles.get(&device.device_id).cloned() {
-            info!("Found existing profile for device: {}", profile.name);
+            debug!("Found existing profile for device: {}", profile.name);
 
             // Update last seen
             profile.last_seen = Some(Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
@@ -224,11 +225,17 @@ impl ProfileManager {
             return Ok(profile);
         }
 
-        // New device detected - prompt user for a name
-        info!("New device detected: {}", device.friendly_name);
-        info!("  Manufacturer: {}", device.manufacturer);
-        info!("  Model: {}", device.model);
-        info!("  Device ID: {}", device.device_id);
+        // New device detected - check for existing extraction profiles in backup folder
+        // that might match this device (by device_id)
+        if let Some(profile) = self.check_for_existing_extraction_profiles(device)? {
+            return Ok(profile);
+        }
+
+        // No existing profile found - prompt user for a name
+        debug!("New device detected: {}", device.friendly_name);
+        debug!("  Manufacturer: {}", device.manufacturer);
+        debug!("  Model: {}", device.model);
+        debug!("  Device ID: {}", device.device_id);
 
         println!("\n========================================");
         println!("  NEW DEVICE DETECTED!");
@@ -277,6 +284,145 @@ impl ProfileManager {
         self.create_and_save_profile(device, &name, &folder_name)
     }
 
+    /// Check for existing extraction profiles that match this device
+    ///
+    /// Scans the backup folder for subdirectories containing extraction state files
+    /// and offers to use any that match the current device's ID.
+    fn check_for_existing_extraction_profiles(
+        &mut self,
+        device: &DeviceInfo,
+    ) -> Result<Option<DeviceProfile>> {
+        // Skip if backup folder is not configured
+        if self.config.backup_base_folder.as_os_str().is_empty() {
+            debug!("Skipping profile scan: backup folder not configured");
+            return Ok(None);
+        }
+
+        debug!(
+            "Scanning for existing extraction profiles in: {}",
+            self.config.backup_base_folder.display()
+        );
+
+        let tracking_config = TrackingConfig::default();
+        let profiles = scan_for_profiles(
+            &self.config.backup_base_folder,
+            &tracking_config.tracking_filename,
+        );
+
+        if profiles.is_empty() {
+            debug!("No existing extraction profiles found in backup folder");
+            return Ok(None);
+        }
+
+        debug!("Found {} existing extraction profile(s)", profiles.len());
+
+        // Check if any profile exactly matches this device's ID
+        let exact_match = profiles.iter().find(|p| p.device_id == device.device_id);
+
+        // Always show existing profiles to let user choose
+        println!("\n╔══════════════════════════════════════════════════════════════════╗");
+        if exact_match.is_some() {
+            println!("║              📱 Previous Extraction Found!                       ║");
+        } else {
+            println!("║              📁 Existing Profiles Found                          ║");
+        }
+        println!("╚══════════════════════════════════════════════════════════════════╝");
+        println!();
+        println!(
+            "Found {} existing extraction profile(s) in backup folder:",
+            profiles.len()
+        );
+        println!();
+
+        for (i, profile) in profiles.iter().enumerate() {
+            let folder_name = profile
+                .path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "(root)".to_string());
+
+            let is_match = exact_match
+                .map(|m| m.device_id == profile.device_id)
+                .unwrap_or(false);
+            let match_indicator = if is_match { " ✓ (same device)" } else { "" };
+
+            println!(
+                "  [{}] {} ({}){}",
+                i + 1,
+                profile.friendly_name,
+                folder_name,
+                match_indicator
+            );
+            println!(
+                "      {} files ({:.2} GB), last used: {}",
+                profile.total_files_extracted,
+                profile.total_bytes_extracted as f64 / 1_073_741_824.0,
+                profile.last_seen.format("%Y-%m-%d %H:%M")
+            );
+        }
+        println!();
+        println!("  [0] Create new profile for this device");
+        println!();
+
+        // Default to the exact match if found, otherwise 0 (create new)
+        let default_selection = if let Some(matched) = &exact_match {
+            profiles
+                .iter()
+                .position(|p| p.device_id == matched.device_id)
+                .map(|i| (i + 1).to_string())
+                .unwrap_or_else(|| "0".to_string())
+        } else {
+            "0".to_string()
+        };
+
+        let selection: String = Input::new()
+            .with_prompt("Select a profile to use, or 0 for new")
+            .default(default_selection)
+            .interact_text()
+            .map_err(|e| ExtractionError::IoError(format!("Failed to read input: {}", e)))?;
+
+        if let Ok(num) = selection.parse::<usize>() {
+            if num > 0 && num <= profiles.len() {
+                let selected = &profiles[num - 1];
+                let folder_name = selected
+                    .path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| sanitize_folder_name(&selected.friendly_name));
+
+                let is_same_device = selected.device_id == device.device_id;
+
+                if !is_same_device {
+                    // Warn if the device IDs don't match
+                    println!();
+                    println!("⚠ Note: This profile was created for a different device.");
+                    println!("  Extraction history will be shared with the selected profile.");
+                    println!();
+
+                    let confirm = Confirm::new()
+                        .with_prompt("Continue with this profile?")
+                        .default(true)
+                        .interact()
+                        .map_err(|e| {
+                            ExtractionError::IoError(format!("Failed to read input: {}", e))
+                        })?;
+
+                    if !confirm {
+                        return Ok(None);
+                    }
+                }
+
+                let profile =
+                    self.create_and_save_profile(device, &selected.friendly_name, &folder_name)?;
+                println!("✓ Using profile: {}", selected.path.display());
+                return Ok(Some(profile));
+            }
+        }
+
+        // User chose to create new profile
+        Ok(None)
+    }
+
     /// Create a new profile and save it
     fn create_and_save_profile(
         &mut self,
@@ -305,7 +451,7 @@ impl ProfileManager {
             ))
         })?;
 
-        info!("Created output folder: {}", output_path.display());
+        debug!("Created output folder: {}", output_path.display());
 
         // Save profile
         self.database

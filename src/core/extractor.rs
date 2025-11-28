@@ -78,6 +78,8 @@ struct PhotoInfo {
     path: String,
     /// File size in bytes
     size: u64,
+    /// Date modified (ISO 8601 string, if available from device)
+    date_modified: Option<String>,
 }
 
 /// Progress tracker for scan operations
@@ -93,12 +95,12 @@ impl ScanProgress {
         let spinner = ProgressBar::new_spinner();
         spinner.set_style(
             ProgressStyle::default_spinner()
-                .template("{spinner:.green} {msg}")
+                .template("  {spinner:.cyan} {msg}")
                 .unwrap()
-                .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ "),
+                .tick_chars("⣾⣽⣻⢿⡿⣟⣯⣷"),
         );
-        spinner.enable_steady_tick(std::time::Duration::from_millis(100));
-        spinner.set_message("Starting scan...");
+        spinner.enable_steady_tick(std::time::Duration::from_millis(80));
+        spinner.set_message("Scanning device...");
 
         Self {
             folders_scanned: AtomicUsize::new(0),
@@ -110,12 +112,21 @@ impl ScanProgress {
 
     fn increment_folders(&self) {
         self.folders_scanned.fetch_add(1, Ordering::Relaxed);
-        self.update_message();
+        self.maybe_update_message();
     }
 
     fn add_files(&self, count: usize) {
         self.files_found.fetch_add(count, Ordering::Relaxed);
-        self.update_message();
+        self.maybe_update_message();
+    }
+
+    /// Only update message periodically to reduce visual noise
+    fn maybe_update_message(&self) {
+        let folders = self.folders_scanned.load(Ordering::Relaxed);
+        // Update every 5 folders or when we find files
+        if folders % 5 == 0 {
+            self.update_message();
+        }
     }
 
     fn update_message(&self) {
@@ -123,7 +134,7 @@ impl ScanProgress {
         let files = self.files_found.load(Ordering::Relaxed);
         let elapsed = self.start_time.elapsed().as_secs();
         self.spinner.set_message(format!(
-            "Scanning... {} folders processed, {} media files found ({:.0}s elapsed)",
+            "Scanning: {} folders, {} media files ({:.0}s)",
             folders, files, elapsed
         ));
     }
@@ -133,9 +144,9 @@ impl ScanProgress {
         let files = self.files_found.load(Ordering::Relaxed);
         let elapsed = self.start_time.elapsed();
         self.spinner.finish_with_message(format!(
-            "✓ Scan complete: {} folders processed, {} media files found in {:.1}s",
-            folders,
+            "✓ Found {} media files in {} folders ({:.1}s)",
             files,
+            folders,
             elapsed.as_secs_f64()
         ));
     }
@@ -154,7 +165,11 @@ pub fn extract_photos(
     config: ExtractionConfig,
     shutdown_flag: Arc<AtomicBool>,
 ) -> Result<ExtractionStats> {
-    info!("Opening device: {}", device_info.friendly_name);
+    // Print clean user-facing output
+    println!();
+    println!("  📱 Device: {}", device_info.friendly_name);
+
+    debug!("Opening device: {}", device_info.friendly_name);
 
     // Create device manager and open device
     let manager = DeviceManager::new()?;
@@ -169,7 +184,8 @@ pub fn extract_photos(
         ))
     })?;
 
-    info!("Output directory: {}", config.output_dir.display());
+    println!("  📁 Output: {}", config.output_dir.display());
+    debug!("Output directory: {}", config.output_dir.display());
 
     // Initialize state tracker if enabled
     let mut tracker = if let Some(ref tracking_config) = config.tracking {
@@ -190,22 +206,24 @@ pub fn extract_photos(
     // Build duplicate detection index if enabled
     let hash_index = if let Some(ref dup_config) = config.duplicate_detection {
         if dup_config.enabled && !dup_config.comparison_folders.is_empty() {
-            info!("Building duplicate detection index...");
+            println!("  🔍 Building duplicate detection index...");
+            debug!("Building duplicate detection index...");
             let detector_config = dup_config.to_detector_config();
             match DuplicateIndex::build_from_folders(
                 &detector_config,
                 shutdown_flag.clone(),
                 |progress| {
-                    if progress.current % 100 == 0 {
-                        debug!(
+                    if progress.current % 500 == 0 {
+                        trace!(
                             "Indexing progress: {}/{} files",
-                            progress.current, progress.total
+                            progress.current,
+                            progress.total
                         );
                     }
                 },
             ) {
                 Ok(index) => {
-                    info!(
+                    debug!(
                         "Duplicate detection index built with {} entries ({} unique hashes)",
                         index.len(),
                         index.stats().unique_hashes
@@ -213,7 +231,8 @@ pub fn extract_photos(
                     Some(index)
                 }
                 Err(e) => {
-                    warn!("Failed to build duplicate index: {}. Continuing without duplicate detection.", e);
+                    println!("  ⚠ Could not build duplicate index, continuing without");
+                    debug!("Failed to build duplicate index: {}", e);
                     None
                 }
             }
@@ -224,42 +243,103 @@ pub fn extract_photos(
         None
     };
 
-    info!("Scanning device for photos...");
+    println!();
 
-    // Find all photos
-    let photos = find_all_photos(&content, config.dcim_only)?;
-    let total = photos.len();
+    // Find all photos - progress is shown by ScanProgress
+    let all_photos = find_all_photos(&content, config.dcim_only)?;
+    let total_on_device = all_photos.len();
 
-    if total == 0 {
-        warn!("No photos found on the device");
+    if total_on_device == 0 {
+        println!("  ⚠ No photos or videos found on the device");
+        println!();
+        println!("  Possible reasons:");
+        println!("    • Device is locked - please unlock and try again");
+        println!("    • No DCIM folder found - try with --dcim-only false");
+        println!("    • Photos may be in iCloud - download them to device first");
         return Ok(ExtractionStats::default());
     }
 
-    info!("Found {} photos/videos to extract", total);
+    debug!("Found {} photos/videos on device", total_on_device);
 
-    // Set up progress bar
+    // Filter out already-extracted files using tracking state
+    let (photos, already_extracted_count) = if let Some(ref t) = tracker {
+        let mut new_photos = Vec::new();
+        let mut skipped = 0u64;
+        for photo in all_photos {
+            if t.is_file_extracted(&photo.object_id) {
+                skipped += 1;
+            } else {
+                new_photos.push(photo);
+            }
+        }
+        (new_photos, skipped)
+    } else {
+        (all_photos, 0)
+    };
+
+    let total = photos.len();
+
+    // Show summary before extraction
+    println!("  📊 Summary:");
+    println!("     Total on device:    {}", total_on_device);
+    if already_extracted_count > 0 {
+        println!("     Already extracted:  {}", already_extracted_count);
+    }
+    println!("     New files to copy:  {}", total);
+    println!();
+
+    if total == 0 {
+        println!("  ✓ All files have already been extracted!");
+        // End tracking session
+        if let Some(ref mut t) = tracker {
+            t.end_session(true, false);
+            if let Err(e) = t.save() {
+                debug!("Failed to save tracking state: {}", e);
+            }
+        }
+        return Ok(ExtractionStats {
+            files_skipped: already_extracted_count as usize,
+            ..Default::default()
+        });
+    }
+
+    // Set up progress bar with clean style
     let progress = ProgressBar::new(total as u64);
     progress.set_style(
         ProgressStyle::default_bar()
-            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({percent}%) {msg}")
+            .template("  {spinner:.green} [{bar:40.cyan/dim}] {pos}/{len} ({percent}%) {msg}")
             .expect("Invalid progress template")
-            .progress_chars("#>-"),
+            .progress_chars("━━╾─"),
     );
+    progress.enable_steady_tick(std::time::Duration::from_millis(100));
 
     let mut stats = ExtractionStats::default();
+    let extract_start = Instant::now();
 
     // Extract each photo
     for (index, photo) in photos.iter().enumerate() {
         // Check for shutdown request before processing each file
         if shutdown_flag.load(Ordering::SeqCst) {
-            warn!("Shutdown requested, stopping extraction...");
-            progress.finish_with_message("Extraction interrupted!");
+            progress.finish_with_message("⚠ Interrupted");
+            println!();
+            println!("  ⚠ Extraction interrupted by user");
             return Ok(stats);
         }
 
         progress.set_position(index as u64);
-        let display_name: String = photo.name.chars().take(30).collect();
-        progress.set_message(display_name);
+
+        // Show current file (truncated) and transfer rate
+        let elapsed = extract_start.elapsed().as_secs_f64();
+        let rate = if elapsed > 0.0 && stats.total_bytes > 0 {
+            format!(
+                "{:.1} MB/s",
+                stats.total_bytes as f64 / elapsed / 1024.0 / 1024.0
+            )
+        } else {
+            String::new()
+        };
+        let display_name: String = photo.name.chars().take(25).collect();
+        progress.set_message(format!("{} {}", display_name, rate));
 
         match extract_single_photo(&content, photo, &config, &hash_index) {
             Ok(ExtractResult::Extracted(bytes)) => {
@@ -276,14 +356,14 @@ pub fn extract_photos(
                 }
             }
             Ok(ExtractResult::Duplicate(path)) => {
-                debug!("Skipping duplicate of: {}", path.display());
+                trace!("Skipping duplicate of: {}", path.display());
                 stats.duplicates_skipped += 1;
                 if let Some(ref mut t) = tracker {
                     t.record_duplicate();
                 }
             }
             Ok(ExtractResult::DuplicateOverwritten(bytes)) => {
-                debug!("Overwrote duplicate: {}", photo.name);
+                trace!("Overwrote duplicate: {}", photo.name);
                 stats.duplicates_overwritten += 1;
                 stats.total_bytes += bytes;
                 if let Some(ref mut t) = tracker {
@@ -291,7 +371,7 @@ pub fn extract_photos(
                 }
             }
             Ok(ExtractResult::DuplicateRenamed(bytes)) => {
-                debug!("Renamed duplicate: {}", photo.name);
+                trace!("Renamed duplicate: {}", photo.name);
                 stats.duplicates_renamed += 1;
                 stats.total_bytes += bytes;
                 if let Some(ref mut t) = tracker {
@@ -299,6 +379,7 @@ pub fn extract_photos(
                 }
             }
             Err(e) => {
+                // Only log errors at debug level to avoid cluttering output
                 debug!("Failed to extract '{}': {}", photo.name, e);
                 stats.errors += 1;
                 if let Some(ref mut t) = tracker {
@@ -308,18 +389,72 @@ pub fn extract_photos(
         }
     }
 
-    progress.finish_with_message("Extraction complete!");
+    // Calculate final stats
+    let elapsed = extract_start.elapsed();
+    let rate = if elapsed.as_secs_f64() > 0.0 {
+        stats.total_bytes as f64 / elapsed.as_secs_f64() / 1024.0 / 1024.0
+    } else {
+        0.0
+    };
+
+    // Show completion with transfer rate
+    progress.set_style(
+        ProgressStyle::default_bar()
+            .template("  ✓ [{bar:40.green/dim}] {pos}/{len} Complete")
+            .expect("Invalid progress template")
+            .progress_chars("━━━"),
+    );
+    progress.finish();
 
     // End tracking session
     let was_interrupted = shutdown_flag.load(Ordering::SeqCst);
     if let Some(ref mut t) = tracker {
         t.end_session(!was_interrupted, was_interrupted);
         if let Err(e) = t.save() {
-            warn!("Failed to save tracking state: {}", e);
+            debug!("Failed to save tracking state: {}", e);
         }
     }
 
+    // Print summary
+    println!();
+    println!("  ─────────────────────────────────────────");
+    println!("  📊 Extraction Results:");
+    println!("     Files extracted:  {}", stats.files_extracted);
+    if stats.files_skipped > 0 {
+        println!("     Files skipped:    {}", stats.files_skipped);
+    }
+    if stats.duplicates_skipped > 0 {
+        println!("     Duplicates:       {}", stats.duplicates_skipped);
+    }
+    if stats.errors > 0 {
+        println!("     Errors:           {}", stats.errors);
+    }
+    println!("     Total size:       {}", format_size(stats.total_bytes));
+    println!(
+        "     Duration:         {:.1}s ({:.1} MB/s)",
+        elapsed.as_secs_f64(),
+        rate
+    );
+    println!();
+
     Ok(stats)
+}
+
+/// Format bytes as human-readable size
+fn format_size(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+
+    if bytes >= GB {
+        format!("{:.2} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.2} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.1} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{} bytes", bytes)
+    }
 }
 
 /// Find all photos on the device recursively
@@ -329,7 +464,7 @@ fn find_all_photos(content: &DeviceContent, dcim_only: bool) -> Result<Vec<Photo
 
     let root_objects = content.enumerate_objects()?;
 
-    info!("Found {} root objects on device", root_objects.len());
+    debug!("Found {} root objects on device", root_objects.len());
 
     for obj in &root_objects {
         debug!(
@@ -363,7 +498,7 @@ fn find_all_photos(content: &DeviceContent, dcim_only: bool) -> Result<Vec<Photo
             // Enumerate children of this object
             match content.enumerate_children(&obj.object_id) {
                 Ok(children) => {
-                    info!("Found {} children in '{}'", children.len(), obj.name);
+                    debug!("Found {} children in '{}'", children.len(), obj.name);
 
                     for child in &children {
                         debug!(
@@ -378,7 +513,7 @@ fn find_all_photos(content: &DeviceContent, dcim_only: bool) -> Result<Vec<Photo
                         for child in &children {
                             let child_name_upper = child.name.to_uppercase();
                             if child_name_upper == "DCIM" && child.is_folder {
-                                info!("Found DCIM folder inside '{}', scanning...", obj.name);
+                                debug!("Found DCIM folder inside '{}', scanning...", obj.name);
                                 found_dcim = true;
                                 scan_folder_recursive(
                                     content,
@@ -429,6 +564,7 @@ fn find_all_photos(content: &DeviceContent, dcim_only: bool) -> Result<Vec<Photo
                                     name: child.name.clone(),
                                     path: format!("{}/{}", obj.name, child.name),
                                     size: child.size,
+                                    date_modified: child.date_modified.clone(),
                                 });
                                 progress.add_files(1);
                             }
@@ -446,6 +582,7 @@ fn find_all_photos(content: &DeviceContent, dcim_only: bool) -> Result<Vec<Photo
                 name: obj.name.clone(),
                 path: obj.name.clone(),
                 size: obj.size,
+                date_modified: obj.date_modified.clone(),
             });
         }
     }
@@ -526,6 +663,7 @@ fn scan_folder_recursive(
                 name: child.name.clone(),
                 path: child_path,
                 size: child.size,
+                date_modified: child.date_modified.clone(),
             });
             media_count += 1;
         }
@@ -618,7 +756,7 @@ fn extract_single_photo(
                 DuplicateAction::Rename => {
                     // Generate a unique filename
                     let new_path = generate_unique_path(&output_path);
-                    return extract_to_path(&new_path, &data, true);
+                    return extract_to_path(&new_path, &data, true, photo.date_modified.as_deref());
                 }
             }
         }
@@ -652,9 +790,82 @@ fn extract_single_photo(
         ))
     })?;
 
+    // Ensure file handle is closed before setting timestamps
+    drop(file);
+
+    // Preserve file timestamps from device metadata
+    if let Some(ref date_str) = photo.date_modified {
+        if let Err(e) = set_file_timestamp(&output_path, date_str) {
+            debug!(
+                "Could not set timestamp for '{}': {}",
+                output_path.display(),
+                e
+            );
+        }
+    }
+
     debug!("Extracted: {} ({} bytes)", output_path.display(), bytes);
 
     Ok(ExtractResult::Extracted(bytes))
+}
+
+/// Set file modification timestamp from ISO 8601 date string
+fn set_file_timestamp(path: &Path, date_str: &str) -> Result<()> {
+    use chrono::{DateTime, Utc};
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows::Win32::Foundation::FILETIME;
+    use windows::Win32::Storage::FileSystem::{
+        SetFileTime, FILE_FLAG_BACKUP_SEMANTICS, FILE_WRITE_ATTRIBUTES,
+    };
+
+    // Parse ISO 8601 date
+    let datetime: DateTime<Utc> = date_str.parse().map_err(|e| {
+        ExtractionError::IoError(format!("Failed to parse date '{}': {}", date_str, e))
+    })?;
+
+    // Convert to FILETIME (100-nanosecond intervals since January 1, 1601)
+    let unix_secs = datetime.timestamp();
+    const FILETIME_UNIX_DIFF: i64 = 116444736000000000;
+    let filetime_value = (unix_secs * 10_000_000) + FILETIME_UNIX_DIFF;
+
+    let filetime = FILETIME {
+        dwLowDateTime: (filetime_value & 0xFFFFFFFF) as u32,
+        dwHighDateTime: ((filetime_value >> 32) & 0xFFFFFFFF) as u32,
+    };
+
+    // Open file with write attributes permission
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .attributes(FILE_FLAG_BACKUP_SEMANTICS.0)
+        .access_mode(FILE_WRITE_ATTRIBUTES.0)
+        .open(path)
+        .map_err(|e| {
+            ExtractionError::IoError(format!(
+                "Failed to open file for timestamp update '{}': {}",
+                path.display(),
+                e
+            ))
+        })?;
+
+    // Set file times using Windows API
+    unsafe {
+        use std::os::windows::io::AsRawHandle;
+        use windows::Win32::Foundation::HANDLE;
+
+        let handle = HANDLE(file.as_raw_handle() as *mut std::ffi::c_void);
+
+        // Set both creation and modification time to the same value
+        SetFileTime(handle, Some(&filetime), None, Some(&filetime)).map_err(|e| {
+            ExtractionError::IoError(format!(
+                "Failed to set file time for '{}': {}",
+                path.display(),
+                e
+            ))
+        })?;
+    }
+
+    trace!("Set timestamp for '{}' to {}", path.display(), date_str);
+    Ok(())
 }
 
 /// Generate a unique path by adding a numeric suffix
@@ -685,7 +896,12 @@ fn generate_unique_path(original_path: &Path) -> PathBuf {
 }
 
 /// Extract data to a specific path
-fn extract_to_path(output_path: &Path, data: &[u8], is_renamed: bool) -> Result<ExtractResult> {
+fn extract_to_path(
+    output_path: &Path,
+    data: &[u8],
+    is_renamed: bool,
+    date_modified: Option<&str>,
+) -> Result<ExtractResult> {
     let bytes = data.len() as u64;
 
     // Ensure parent directory exists
@@ -715,6 +931,20 @@ fn extract_to_path(output_path: &Path, data: &[u8], is_renamed: bool) -> Result<
             e
         ))
     })?;
+
+    // Ensure file handle is closed before setting timestamps
+    drop(file);
+
+    // Preserve file timestamps from device metadata
+    if let Some(date_str) = date_modified {
+        if let Err(e) = set_file_timestamp(output_path, date_str) {
+            debug!(
+                "Could not set timestamp for '{}': {}",
+                output_path.display(),
+                e
+            );
+        }
+    }
 
     debug!("Extracted: {} ({} bytes)", output_path.display(), bytes);
 

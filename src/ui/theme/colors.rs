@@ -429,13 +429,14 @@ pub struct BackgroundColors {
 impl BackgroundColors {
     pub fn dark() -> Self {
         Self {
-            primary: Color::from_hex("#1E1E2E"),
-            secondary: Color::from_hex("#181825"),
-            tertiary: Color::from_hex("#11111B"),
-            elevated: Color::from_hex("#313244"),
-            hover: Color::from_rgba(69, 71, 90, 0.5),
-            active: Color::from_rgba(69, 71, 90, 0.7),
-            selected: Color::from_rgba(137, 180, 250, 0.2),
+            // VS Code Dark+ style backgrounds
+            primary: Color::from_hex("#1E1E1E"), // main editor background
+            secondary: Color::from_hex("#252526"), // sidebars / panels
+            tertiary: Color::from_hex("#2D2D30"), // nested panels / cards
+            elevated: Color::from_hex("#333333"), // modals / popups
+            hover: Color::from_rgba(90, 93, 94, 0.5),
+            active: Color::from_rgba(90, 93, 94, 0.8),
+            selected: Color::from_rgba(14, 99, 156, 0.35), // selection blue
         }
     }
 
@@ -490,13 +491,14 @@ pub struct ForegroundColors {
 impl ForegroundColors {
     pub fn dark() -> Self {
         Self {
-            primary: Color::from_hex("#CDD6F4"),
-            secondary: Color::from_hex("#A6ADC8"),
-            muted: Color::from_hex("#6C7086"),
-            placeholder: Color::from_hex("#585B70"),
-            inverted: Color::from_hex("#1E1E2E"),
-            link: Color::from_hex("#89B4FA"),
-            link_hover: Color::from_hex("#B4BEFE"),
+            // VS Code Dark+ style foregrounds
+            primary: Color::from_hex("#D4D4D4"),     // main text
+            secondary: Color::from_hex("#CCCCCC"),   // less-emphasis text
+            muted: Color::from_hex("#808080"),       // disabled / hints
+            placeholder: Color::from_hex("#6A6A6A"), // placeholders
+            inverted: Color::from_hex("#1E1E1E"),    // text on bright accents
+            link: Color::from_hex("#3794FF"),        // link blue
+            link_hover: Color::from_hex("#4FC1FF"),
         }
     }
 
@@ -547,11 +549,12 @@ pub struct BorderColors {
 impl BorderColors {
     pub fn dark() -> Self {
         Self {
-            default: Color::from_hex("#313244"),
-            subtle: Color::from_hex("#45475A"),
-            strong: Color::from_hex("#6C7086"),
-            focused: Color::from_hex("#89B4FA"),
-            error: Color::from_hex("#F38BA8"),
+            // VS Code Dark+ style borders
+            default: Color::from_hex("#3C3C3C"),
+            subtle: Color::from_hex("#2A2A2A"),
+            strong: Color::from_hex("#4D4D4D"),
+            focused: Color::from_hex("#007ACC"), // VS Code focus blue
+            error: Color::from_hex("#F48771"),
         }
     }
 
@@ -607,16 +610,17 @@ pub struct SemanticColors {
 impl SemanticColors {
     pub fn dark() -> Self {
         Self {
-            accent: Color::from_hex("#89B4FA"),
-            success: Color::from_hex("#A6E3A1"),
-            warning: Color::from_hex("#F9E2AF"),
-            error: Color::from_hex("#F38BA8"),
-            info: Color::from_hex("#89DCEB"),
+            // VS Code Dark+ inspired semantic colors
+            accent: Color::from_hex("#007ACC"), // primary accent blue
+            success: Color::from_hex("#89D185"), // green status
+            warning: Color::from_hex("#CCA700"), // yellow status
+            error: Color::from_hex("#F48771"),  // red/orange error
+            info: Color::from_hex("#75BEFF"),   // info blue
 
-            success_background: Color::from_rgba(166, 227, 161, 0.15),
-            warning_background: Color::from_rgba(249, 226, 175, 0.15),
-            error_background: Color::from_rgba(243, 139, 168, 0.15),
-            info_background: Color::from_rgba(137, 220, 235, 0.15),
+            success_background: Color::from_rgba(137, 209, 133, 0.18),
+            warning_background: Color::from_rgba(204, 167, 0, 0.18),
+            error_background: Color::from_rgba(244, 135, 113, 0.20),
+            info_background: Color::from_rgba(117, 190, 255, 0.20),
         }
     }
 
@@ -679,14 +683,15 @@ pub struct AccentColors {
 impl AccentColors {
     pub fn dark() -> Self {
         Self {
-            blue: Color::from_hex("#89B4FA"),
-            purple: Color::from_hex("#CBA6F7"),
-            pink: Color::from_hex("#F5C2E7"),
-            red: Color::from_hex("#F38BA8"),
-            orange: Color::from_hex("#FAB387"),
-            yellow: Color::from_hex("#F9E2AF"),
-            green: Color::from_hex("#A6E3A1"),
-            teal: Color::from_hex("#94E2D5"),
+            // VS Code Dark+ style accents
+            blue: Color::from_hex("#007ACC"), // primary accent
+            purple: Color::from_hex("#C586C0"),
+            pink: Color::from_hex("#D16D9E"),
+            red: Color::from_hex("#F44747"),
+            orange: Color::from_hex("#CE9178"),
+            yellow: Color::from_hex("#DCDCAA"),
+            green: Color::from_hex("#608B4E"),
+            teal: Color::from_hex("#4EC9B0"),
         }
     }
 
@@ -737,10 +742,11 @@ pub struct SurfaceColors {
 impl SurfaceColors {
     pub fn dark() -> Self {
         Self {
-            level0: Color::from_hex("#1E1E2E"),
-            level1: Color::from_hex("#313244"),
-            level2: Color::from_hex("#45475A"),
-            level3: Color::from_hex("#585B70"),
+            // VS Code Dark+ surface hierarchy
+            level0: Color::from_hex("#1E1E1E"), // base
+            level1: Color::from_hex("#252526"), // slight elevation
+            level2: Color::from_hex("#2D2D30"), // panels / cards
+            level3: Color::from_hex("#3C3C3C"), // overlays / popups
         }
     }
 

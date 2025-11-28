@@ -37,6 +37,7 @@ use log::{debug, info, trace, warn};
 use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io::Write;
+use std::os::windows::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -268,6 +269,8 @@ struct FileInfo {
     path: String,
     /// File size
     size: u64,
+    /// Date modified (ISO 8601 string, if available from device)
+    date_modified: Option<String>,
 }
 
 // =============================================================================
@@ -397,7 +400,7 @@ impl GenericExtractor {
                 Ok(ExtractResult::Skipped) => {
                     stats.files_skipped += 1;
                 }
-                Ok(ExtractResult::Duplicate) => {
+                Ok(ExtractResult::Duplicate(_bytes)) => {
                     stats.duplicates_found += 1;
                     stats.files_skipped += 1;
                 }
@@ -471,6 +474,7 @@ impl GenericExtractor {
                             name: child.name.clone(),
                             path: format!("{}/{}", root.name, child.name),
                             size: child.size,
+                            date_modified: child.date_modified.clone(),
                         });
                     }
                 }
@@ -517,6 +521,7 @@ impl GenericExtractor {
                     name: child.name.clone(),
                     path: child_path,
                     size: child.size,
+                    date_modified: child.date_modified.clone(),
                 });
             }
         }
@@ -598,6 +603,20 @@ impl GenericExtractor {
                 ))
             })?;
 
+            // Ensure file handle is closed before setting timestamps
+            drop(output_file);
+
+            // Preserve file timestamps from device metadata
+            if let Some(ref date_str) = file.date_modified {
+                if let Err(e) = set_file_timestamp(&output_path, date_str) {
+                    debug!(
+                        "Could not set timestamp for '{}': {}",
+                        output_path.display(),
+                        e
+                    );
+                }
+            }
+
             debug!("Extracted: {} ({} bytes)", output_path.display(), bytes);
         } else {
             trace!("Dry run: would extract {} ({} bytes)", file.name, bytes);
@@ -632,7 +651,65 @@ enum ExtractResult {
     /// File was skipped (already exists)
     Skipped,
     /// File was a duplicate
-    Duplicate,
+    Duplicate(u64),
+}
+
+/// Set file modification timestamp from ISO 8601 date string
+fn set_file_timestamp(path: &std::path::Path, date_str: &str) -> Result<()> {
+    use chrono::{DateTime, Utc};
+    use windows::Win32::Foundation::FILETIME;
+    use windows::Win32::Storage::FileSystem::{
+        SetFileTime, FILE_FLAG_BACKUP_SEMANTICS, FILE_WRITE_ATTRIBUTES,
+    };
+
+    // Parse ISO 8601 date
+    let datetime: DateTime<Utc> = date_str.parse().map_err(|e| {
+        ExtractionError::IoError(format!("Failed to parse date '{}': {}", date_str, e))
+    })?;
+
+    // Convert to FILETIME (100-nanosecond intervals since January 1, 1601)
+    let unix_secs = datetime.timestamp();
+    const FILETIME_UNIX_DIFF: i64 = 116444736000000000;
+    let filetime_value = (unix_secs * 10_000_000) + FILETIME_UNIX_DIFF;
+
+    let filetime = FILETIME {
+        dwLowDateTime: (filetime_value & 0xFFFFFFFF) as u32,
+        dwHighDateTime: ((filetime_value >> 32) & 0xFFFFFFFF) as u32,
+    };
+
+    // Open file with write attributes permission
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .attributes(FILE_FLAG_BACKUP_SEMANTICS.0)
+        .access_mode(FILE_WRITE_ATTRIBUTES.0)
+        .open(path)
+        .map_err(|e| {
+            ExtractionError::IoError(format!(
+                "Failed to open file for timestamp update '{}': {}",
+                path.display(),
+                e
+            ))
+        })?;
+
+    // Set file times using Windows API
+    unsafe {
+        use std::os::windows::io::AsRawHandle;
+        use windows::Win32::Foundation::HANDLE;
+
+        let handle = HANDLE(file.as_raw_handle() as *mut std::ffi::c_void);
+
+        // Set both creation and modification time to the same value
+        SetFileTime(handle, Some(&filetime), None, Some(&filetime)).map_err(|e| {
+            ExtractionError::IoError(format!(
+                "Failed to set file time for '{}': {}",
+                path.display(),
+                e
+            ))
+        })?;
+    }
+
+    log::trace!("Set timestamp for '{}' to {}", path.display(), date_str);
+    Ok(())
 }
 
 // =============================================================================

@@ -5,6 +5,23 @@
 //! - Extraction history and statistics
 //! - List of extracted files for resume support
 //!
+//! # Profile Scanning
+//!
+//! This module also provides functionality to scan directories for existing
+//! extraction profiles. When a user selects an output directory, the tool can
+//! scan subdirectories for tracking files and present discovered profiles.
+//!
+//! ```rust,no_run
+//! use photo_extraction_tool::core::tracking::{scan_for_profiles, ProfileSummary};
+//! use std::path::Path;
+//!
+//! let profiles = scan_for_profiles(Path::new("D:/Photos"), ".photo_extraction_state.json");
+//! for profile in profiles {
+//!     println!("Found profile: {} ({} files extracted)",
+//!         profile.friendly_name, profile.total_files_extracted);
+//! }
+//! ```
+//!
 //! Some accessor methods are kept for API completeness and future use.
 
 use crate::core::config::TrackingConfig;
@@ -115,6 +132,190 @@ pub struct ExtractionSession {
     pub interrupted: bool,
 }
 
+/// Summary of a discovered profile from scanning
+///
+/// This struct provides a lightweight view of an extraction profile found
+/// in a subdirectory, useful for presenting options to the user.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProfileSummary {
+    /// Path to the profile folder (parent of tracking file)
+    pub path: PathBuf,
+
+    /// WPD Device ID
+    pub device_id: String,
+
+    /// User-friendly device name
+    pub friendly_name: String,
+
+    /// Device manufacturer
+    pub manufacturer: String,
+
+    /// Device model
+    pub model: String,
+
+    /// Total files extracted for this profile
+    pub total_files_extracted: u64,
+
+    /// Total bytes extracted for this profile
+    pub total_bytes_extracted: u64,
+
+    /// Total extraction sessions
+    pub total_sessions: u64,
+
+    /// First seen timestamp
+    pub first_seen: DateTime<Utc>,
+
+    /// Last seen timestamp
+    pub last_seen: DateTime<Utc>,
+}
+
+impl ProfileSummary {
+    /// Create a ProfileSummary from an ExtractionState and its path
+    pub fn from_state(state: &ExtractionState, path: PathBuf) -> Self {
+        Self {
+            path,
+            device_id: state.device.device_id.clone(),
+            friendly_name: state.device.friendly_name.clone(),
+            manufacturer: state.device.manufacturer.clone(),
+            model: state.device.model.clone(),
+            total_files_extracted: state.stats.total_files_extracted,
+            total_bytes_extracted: state.stats.total_bytes_extracted,
+            total_sessions: state.stats.total_sessions,
+            first_seen: state.device.first_seen,
+            last_seen: state.device.last_seen,
+        }
+    }
+
+    /// Get a display-friendly description of the profile
+    pub fn display_description(&self) -> String {
+        format!(
+            "{} ({}) - {} files, {} sessions",
+            self.friendly_name, self.model, self.total_files_extracted, self.total_sessions
+        )
+    }
+}
+
+/// Scan a directory for existing extraction profiles
+///
+/// This function looks in immediate subdirectories of `root` for tracking files
+/// (e.g., `.photo_extraction_state.json`). It parses found files and returns
+/// a summary of each discovered profile.
+///
+/// # Arguments
+///
+/// * `root` - The root directory to scan (immediate children are checked)
+/// * `tracking_filename` - The name of the tracking file to look for
+///
+/// # Returns
+///
+/// A vector of `ProfileSummary` for each valid profile found. Invalid or
+/// corrupted tracking files are logged and skipped.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use photo_extraction_tool::core::tracking::scan_for_profiles;
+/// use std::path::Path;
+///
+/// let profiles = scan_for_profiles(Path::new("D:/Photos"), ".photo_extraction_state.json");
+/// for profile in &profiles {
+///     println!("Found: {} in {:?}", profile.friendly_name, profile.path);
+/// }
+/// ```
+pub fn scan_for_profiles(root: &Path, tracking_filename: &str) -> Vec<ProfileSummary> {
+    let mut profiles = Vec::new();
+
+    // Check if root exists and is a directory
+    if !root.is_dir() {
+        debug!("Profile scan: root {:?} is not a directory", root);
+        return profiles;
+    }
+
+    // First, check if there's a tracking file directly in the root
+    let root_tracking_file = root.join(tracking_filename);
+    if root_tracking_file.exists() {
+        if let Some(summary) = load_profile_summary(&root_tracking_file, root.to_path_buf()) {
+            debug!(
+                "Found profile in root directory: {} ({} files)",
+                summary.friendly_name, summary.total_files_extracted
+            );
+            profiles.push(summary);
+        }
+    }
+
+    // Scan immediate subdirectories
+    let entries = match fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(e) => {
+            warn!("Failed to read directory {:?}: {}", root, e);
+            return profiles;
+        }
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+
+        // Only check directories
+        if !path.is_dir() {
+            continue;
+        }
+
+        let tracking_file = path.join(tracking_filename);
+        if tracking_file.exists() {
+            if let Some(summary) = load_profile_summary(&tracking_file, path.clone()) {
+                debug!(
+                    "Found profile: {} in {:?} ({} files extracted)",
+                    summary.friendly_name, path, summary.total_files_extracted
+                );
+                profiles.push(summary);
+            }
+        }
+    }
+
+    // Sort by last_seen (most recent first)
+    profiles.sort_by(|a, b| b.last_seen.cmp(&a.last_seen));
+
+    debug!(
+        "Profile scan complete: found {} profiles in {:?}",
+        profiles.len(),
+        root
+    );
+
+    profiles
+}
+
+/// Load a profile summary from a tracking file
+///
+/// Returns `None` if the file cannot be read or parsed.
+fn load_profile_summary(tracking_file: &Path, profile_path: PathBuf) -> Option<ProfileSummary> {
+    let file = match File::open(tracking_file) {
+        Ok(f) => f,
+        Err(e) => {
+            warn!("Failed to open tracking file {:?}: {}", tracking_file, e);
+            return None;
+        }
+    };
+
+    let reader = BufReader::new(file);
+    let state: ExtractionState = match serde_json::from_reader(reader) {
+        Ok(s) => s,
+        Err(e) => {
+            warn!("Failed to parse tracking file {:?}: {}", tracking_file, e);
+            return None;
+        }
+    };
+
+    Some(ProfileSummary::from_state(&state, profile_path))
+}
+
+/// Scan for profiles using default tracking configuration
+///
+/// Convenience function that uses the default tracking filename.
+pub fn scan_for_profiles_default(root: &Path) -> Vec<ProfileSummary> {
+    let config = TrackingConfig::default();
+    scan_for_profiles(root, &config.tracking_filename)
+}
+
 /// Tracker for managing extraction state
 pub struct StateTracker {
     /// Configuration
@@ -200,7 +401,7 @@ impl StateTracker {
                 Ok(state) => {
                     // Verify it's for the same device
                     if state.device.device_id == device_info.device_id {
-                        info!(
+                        debug!(
                             "Loaded tracking state for device '{}' ({} files previously extracted)",
                             state.device.friendly_name, state.stats.total_files_extracted
                         );
@@ -230,7 +431,7 @@ impl StateTracker {
                 }
             }
         } else {
-            info!(
+            debug!(
                 "Creating new tracking state for device '{}'",
                 device_info.friendly_name
             );
@@ -317,7 +518,7 @@ impl StateTracker {
         });
         self.dirty = true;
 
-        info!("Started extraction session at {}", now);
+        debug!("Started extraction session at {}", now);
     }
 
     /// Record a file as extracted
@@ -382,7 +583,7 @@ impl StateTracker {
             session.completed = completed;
             session.interrupted = interrupted;
 
-            info!(
+            debug!(
                 "Session ended: {} files extracted, {} skipped, {} duplicates, {} errors",
                 session.files_extracted,
                 session.files_skipped,
@@ -454,6 +655,8 @@ impl Drop for StateTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use tempfile::TempDir;
 
     #[test]
     fn test_extraction_state_new() {
@@ -494,5 +697,153 @@ mod tests {
         assert!(tracker.is_file_extracted("file1"));
         assert!(tracker.is_file_extracted("file2"));
         assert!(!tracker.is_file_extracted("file3"));
+    }
+
+    #[test]
+    fn test_profile_summary_from_state() {
+        let device_info = DeviceInfo {
+            device_id: "device-123".to_string(),
+            friendly_name: "My iPhone".to_string(),
+            manufacturer: "Apple Inc.".to_string(),
+            model: "iPhone 14 Pro".to_string(),
+        };
+
+        let mut state = ExtractionState::new(&device_info);
+        state.stats.total_files_extracted = 500;
+        state.stats.total_bytes_extracted = 5_000_000_000;
+        state.stats.total_sessions = 3;
+
+        let summary = ProfileSummary::from_state(&state, PathBuf::from("/photos/my_iphone"));
+
+        assert_eq!(summary.device_id, "device-123");
+        assert_eq!(summary.friendly_name, "My iPhone");
+        assert_eq!(summary.model, "iPhone 14 Pro");
+        assert_eq!(summary.total_files_extracted, 500);
+        assert_eq!(summary.total_sessions, 3);
+        assert_eq!(summary.path, PathBuf::from("/photos/my_iphone"));
+    }
+
+    #[test]
+    fn test_profile_summary_display_description() {
+        let device_info = DeviceInfo {
+            device_id: "test-id".to_string(),
+            friendly_name: "Test Device".to_string(),
+            manufacturer: "Apple Inc.".to_string(),
+            model: "iPhone 15".to_string(),
+        };
+
+        let mut state = ExtractionState::new(&device_info);
+        state.stats.total_files_extracted = 100;
+        state.stats.total_sessions = 5;
+
+        let summary = ProfileSummary::from_state(&state, PathBuf::from("/test"));
+        let desc = summary.display_description();
+
+        assert!(desc.contains("Test Device"));
+        assert!(desc.contains("iPhone 15"));
+        assert!(desc.contains("100 files"));
+        assert!(desc.contains("5 sessions"));
+    }
+
+    #[test]
+    fn test_scan_for_profiles_empty_directory() {
+        let temp_dir = TempDir::new().unwrap();
+        let profiles = scan_for_profiles(temp_dir.path(), ".photo_extraction_state.json");
+        assert!(profiles.is_empty());
+    }
+
+    #[test]
+    fn test_scan_for_profiles_nonexistent_directory() {
+        let profiles = scan_for_profiles(
+            Path::new("/nonexistent/path"),
+            ".photo_extraction_state.json",
+        );
+        assert!(profiles.is_empty());
+    }
+
+    #[test]
+    fn test_scan_for_profiles_finds_profiles() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create a subdirectory with a valid tracking file
+        let profile_dir = temp_dir.path().join("johns_iphone");
+        fs::create_dir(&profile_dir).unwrap();
+
+        let device_info = DeviceInfo {
+            device_id: "device-abc".to_string(),
+            friendly_name: "John's iPhone".to_string(),
+            manufacturer: "Apple Inc.".to_string(),
+            model: "iPhone 15 Pro Max".to_string(),
+        };
+
+        let mut state = ExtractionState::new(&device_info);
+        state.stats.total_files_extracted = 1234;
+        state.stats.total_sessions = 10;
+
+        let tracking_file = profile_dir.join(".photo_extraction_state.json");
+        let mut file = File::create(&tracking_file).unwrap();
+        let json = serde_json::to_string_pretty(&state).unwrap();
+        file.write_all(json.as_bytes()).unwrap();
+
+        // Create another subdirectory without a tracking file (should be ignored)
+        let other_dir = temp_dir.path().join("other_folder");
+        fs::create_dir(&other_dir).unwrap();
+
+        // Scan
+        let profiles = scan_for_profiles(temp_dir.path(), ".photo_extraction_state.json");
+
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].friendly_name, "John's iPhone");
+        assert_eq!(profiles[0].total_files_extracted, 1234);
+        assert_eq!(profiles[0].path, profile_dir);
+    }
+
+    #[test]
+    fn test_scan_for_profiles_handles_corrupted_file() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create a subdirectory with an invalid tracking file
+        let profile_dir = temp_dir.path().join("corrupted_profile");
+        fs::create_dir(&profile_dir).unwrap();
+
+        let tracking_file = profile_dir.join(".photo_extraction_state.json");
+        let mut file = File::create(&tracking_file).unwrap();
+        file.write_all(b"{ invalid json content }").unwrap();
+
+        // Scan should return empty (corrupted file is skipped)
+        let profiles = scan_for_profiles(temp_dir.path(), ".photo_extraction_state.json");
+        assert!(profiles.is_empty());
+    }
+
+    #[test]
+    fn test_scan_for_profiles_in_root() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create a tracking file directly in the root
+        let device_info = DeviceInfo {
+            device_id: "root-device".to_string(),
+            friendly_name: "Root iPhone".to_string(),
+            manufacturer: "Apple Inc.".to_string(),
+            model: "iPhone SE".to_string(),
+        };
+
+        let state = ExtractionState::new(&device_info);
+        let tracking_file = temp_dir.path().join(".photo_extraction_state.json");
+        let mut file = File::create(&tracking_file).unwrap();
+        let json = serde_json::to_string_pretty(&state).unwrap();
+        file.write_all(json.as_bytes()).unwrap();
+
+        let profiles = scan_for_profiles(temp_dir.path(), ".photo_extraction_state.json");
+
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].friendly_name, "Root iPhone");
+        assert_eq!(profiles[0].path, temp_dir.path());
+    }
+
+    #[test]
+    fn test_scan_for_profiles_default() {
+        let temp_dir = TempDir::new().unwrap();
+        let profiles = scan_for_profiles_default(temp_dir.path());
+        assert!(profiles.is_empty());
     }
 }
