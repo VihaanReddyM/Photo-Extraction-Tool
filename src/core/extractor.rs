@@ -40,6 +40,8 @@ pub struct ExtractionConfig {
     pub duplicate_detection: Option<DuplicateDetectionConfig>,
     /// Tracking configuration
     pub tracking: Option<TrackingConfig>,
+    /// Quiet mode - suppresses console output (for parallel extraction)
+    pub quiet: bool,
 }
 
 impl Default for ExtractionConfig {
@@ -51,12 +53,13 @@ impl Default for ExtractionConfig {
             skip_existing: true,
             duplicate_detection: None,
             tracking: None,
+            quiet: false,
         }
     }
 }
 
 /// Statistics about the extraction process
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct ExtractionStats {
     pub files_extracted: usize,
     pub files_skipped: usize,
@@ -159,15 +162,39 @@ const PHOTO_EXTENSIONS: &[&str] = &[
 
 const VIDEO_EXTENSIONS: &[&str] = &["mov", "mp4", "m4v", "avi", "3gp"];
 
+/// Progress callback for extraction - receives (files_processed_this_update, bytes_this_update)
+pub type ProgressCallback = Box<dyn Fn(usize, u64) + Send>;
+
+/// Callback to report total files to process
+pub type TotalFilesCallback = Box<dyn Fn(usize) + Send>;
+
 /// Extract photos from a device
 pub fn extract_photos(
     device_info: &DeviceInfo,
     config: ExtractionConfig,
     shutdown_flag: Arc<AtomicBool>,
 ) -> Result<ExtractionStats> {
+    extract_photos_with_progress(device_info, config, shutdown_flag, None, None)
+}
+
+/// Extract photos from a device with progress callbacks
+///
+/// - `progress_callback`: receives (files_processed, bytes_transferred) updates per file
+/// - `total_files_callback`: called once with total number of files to process
+pub fn extract_photos_with_progress(
+    device_info: &DeviceInfo,
+    config: ExtractionConfig,
+    shutdown_flag: Arc<AtomicBool>,
+    progress_callback: Option<ProgressCallback>,
+    total_files_callback: Option<TotalFilesCallback>,
+) -> Result<ExtractionStats> {
+    let quiet = config.quiet;
+
     // Print clean user-facing output
-    println!();
-    println!("  📱 Device: {}", device_info.friendly_name);
+    if !quiet {
+        println!();
+        println!("  📱 Device: {}", device_info.friendly_name);
+    }
 
     debug!("Opening device: {}", device_info.friendly_name);
 
@@ -184,7 +211,9 @@ pub fn extract_photos(
         ))
     })?;
 
-    println!("  📁 Output: {}", config.output_dir.display());
+    if !quiet {
+        println!("  📁 Output: {}", config.output_dir.display());
+    }
     debug!("Output directory: {}", config.output_dir.display());
 
     // Initialize state tracker if enabled
@@ -206,7 +235,9 @@ pub fn extract_photos(
     // Build duplicate detection index if enabled
     let hash_index = if let Some(ref dup_config) = config.duplicate_detection {
         if dup_config.enabled && !dup_config.comparison_folders.is_empty() {
-            println!("  🔍 Building duplicate detection index...");
+            if !quiet {
+                println!("  🔍 Building duplicate detection index...");
+            }
             debug!("Building duplicate detection index...");
             let detector_config = dup_config.to_detector_config();
             match DuplicateIndex::build_from_folders(
@@ -231,7 +262,9 @@ pub fn extract_photos(
                     Some(index)
                 }
                 Err(e) => {
-                    println!("  ⚠ Could not build duplicate index, continuing without");
+                    if !quiet {
+                        println!("  ⚠ Could not build duplicate index, continuing without");
+                    }
                     debug!("Failed to build duplicate index: {}", e);
                     None
                 }
@@ -243,19 +276,23 @@ pub fn extract_photos(
         None
     };
 
-    println!();
+    if !quiet {
+        println!();
+    }
 
-    // Find all photos - progress is shown by ScanProgress
-    let all_photos = find_all_photos(&content, config.dcim_only)?;
+    // Find all photos - progress is shown by ScanProgress (only in non-quiet mode)
+    let all_photos = find_all_photos_with_progress(&content, config.dcim_only, quiet)?;
     let total_on_device = all_photos.len();
 
     if total_on_device == 0 {
-        println!("  ⚠ No photos or videos found on the device");
-        println!();
-        println!("  Possible reasons:");
-        println!("    • Device is locked - please unlock and try again");
-        println!("    • No DCIM folder found - try with --dcim-only false");
-        println!("    • Photos may be in iCloud - download them to device first");
+        if !quiet {
+            println!("  ⚠ No photos or videos found on the device");
+            println!();
+            println!("  Possible reasons:");
+            println!("    • Device is locked - please unlock and try again");
+            println!("    • No DCIM folder found - try with --dcim-only false");
+            println!("    • Photos may be in iCloud - download them to device first");
+        }
         return Ok(ExtractionStats::default());
     }
 
@@ -280,16 +317,25 @@ pub fn extract_photos(
     let total = photos.len();
 
     // Show summary before extraction
-    println!("  📊 Summary:");
-    println!("     Total on device:    {}", total_on_device);
-    if already_extracted_count > 0 {
-        println!("     Already extracted:  {}", already_extracted_count);
+    if !quiet {
+        println!("  📊 Summary:");
+        println!("     Total on device:    {}", total_on_device);
+        if already_extracted_count > 0 {
+            println!("     Already extracted:  {}", already_extracted_count);
+        }
+        println!("     New files to copy:  {}", total);
+        println!();
     }
-    println!("     New files to copy:  {}", total);
-    println!();
+
+    // Report total files to process via callback
+    if let Some(ref cb) = total_files_callback {
+        cb(total);
+    }
 
     if total == 0 {
-        println!("  ✓ All files have already been extracted!");
+        if !quiet {
+            println!("  ✓ All files have already been extracted!");
+        }
         // End tracking session
         if let Some(ref mut t) = tracker {
             t.end_session(true, false);
@@ -303,15 +349,20 @@ pub fn extract_photos(
         });
     }
 
-    // Set up progress bar with clean style
-    let progress = ProgressBar::new(total as u64);
-    progress.set_style(
-        ProgressStyle::default_bar()
-            .template("  {spinner:.green} [{bar:40.cyan/dim}] {pos}/{len} ({percent}%) {msg}")
-            .expect("Invalid progress template")
-            .progress_chars("━━╾─"),
-    );
-    progress.enable_steady_tick(std::time::Duration::from_millis(100));
+    // Set up progress bar with clean style (hidden in quiet mode)
+    let progress = if quiet {
+        ProgressBar::hidden()
+    } else {
+        let pb = ProgressBar::new(total as u64);
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .template("  {spinner:.green} [{bar:40.cyan/dim}] {pos}/{len} ({percent}%) {msg}")
+                .expect("Invalid progress template")
+                .progress_chars("━━╾─"),
+        );
+        pb.enable_steady_tick(std::time::Duration::from_millis(100));
+        pb
+    };
 
     let mut stats = ExtractionStats::default();
     let extract_start = Instant::now();
@@ -320,9 +371,11 @@ pub fn extract_photos(
     for (index, photo) in photos.iter().enumerate() {
         // Check for shutdown request before processing each file
         if shutdown_flag.load(Ordering::SeqCst) {
-            progress.finish_with_message("⚠ Interrupted");
-            println!();
-            println!("  ⚠ Extraction interrupted by user");
+            if !quiet {
+                progress.finish_with_message("⚠ Interrupted");
+                println!();
+                println!("  ⚠ Extraction interrupted by user");
+            }
             return Ok(stats);
         }
 
@@ -348,11 +401,17 @@ pub fn extract_photos(
                 if let Some(ref mut t) = tracker {
                     t.record_extracted(&photo.object_id, bytes);
                 }
+                if let Some(ref cb) = progress_callback {
+                    cb(1, bytes);
+                }
             }
             Ok(ExtractResult::Skipped) => {
                 stats.files_skipped += 1;
                 if let Some(ref mut t) = tracker {
                     t.record_skipped();
+                }
+                if let Some(ref cb) = progress_callback {
+                    cb(1, 0);
                 }
             }
             Ok(ExtractResult::Duplicate(path)) => {
@@ -360,6 +419,9 @@ pub fn extract_photos(
                 stats.duplicates_skipped += 1;
                 if let Some(ref mut t) = tracker {
                     t.record_duplicate();
+                }
+                if let Some(ref cb) = progress_callback {
+                    cb(1, 0);
                 }
             }
             Ok(ExtractResult::DuplicateOverwritten(bytes)) => {
@@ -369,6 +431,9 @@ pub fn extract_photos(
                 if let Some(ref mut t) = tracker {
                     t.record_extracted(&photo.object_id, bytes);
                 }
+                if let Some(ref cb) = progress_callback {
+                    cb(1, bytes);
+                }
             }
             Ok(ExtractResult::DuplicateRenamed(bytes)) => {
                 trace!("Renamed duplicate: {}", photo.name);
@@ -377,6 +442,9 @@ pub fn extract_photos(
                 if let Some(ref mut t) = tracker {
                     t.record_extracted(&photo.object_id, bytes);
                 }
+                if let Some(ref cb) = progress_callback {
+                    cb(1, bytes);
+                }
             }
             Err(e) => {
                 // Only log errors at debug level to avoid cluttering output
@@ -384,6 +452,9 @@ pub fn extract_photos(
                 stats.errors += 1;
                 if let Some(ref mut t) = tracker {
                     t.record_error();
+                }
+                if let Some(ref cb) = progress_callback {
+                    cb(1, 0);
                 }
             }
         }
@@ -398,13 +469,15 @@ pub fn extract_photos(
     };
 
     // Show completion with transfer rate
-    progress.set_style(
-        ProgressStyle::default_bar()
-            .template("  ✓ [{bar:40.green/dim}] {pos}/{len} Complete")
-            .expect("Invalid progress template")
-            .progress_chars("━━━"),
-    );
-    progress.finish();
+    if !quiet {
+        progress.set_style(
+            ProgressStyle::default_bar()
+                .template("  ✓ [{bar:40.green/dim}] {pos}/{len} Complete")
+                .expect("Invalid progress template")
+                .progress_chars("━━━"),
+        );
+        progress.finish();
+    }
 
     // End tracking session
     let was_interrupted = shutdown_flag.load(Ordering::SeqCst);
@@ -416,26 +489,28 @@ pub fn extract_photos(
     }
 
     // Print summary
-    println!();
-    println!("  ─────────────────────────────────────────");
-    println!("  📊 Extraction Results:");
-    println!("     Files extracted:  {}", stats.files_extracted);
-    if stats.files_skipped > 0 {
-        println!("     Files skipped:    {}", stats.files_skipped);
+    if !quiet {
+        println!();
+        println!("  ─────────────────────────────────────────");
+        println!("  📊 Extraction Results:");
+        println!("     Files extracted:  {}", stats.files_extracted);
+        if stats.files_skipped > 0 {
+            println!("     Files skipped:    {}", stats.files_skipped);
+        }
+        if stats.duplicates_skipped > 0 {
+            println!("     Duplicates:       {}", stats.duplicates_skipped);
+        }
+        if stats.errors > 0 {
+            println!("     Errors:           {}", stats.errors);
+        }
+        println!("     Total size:       {}", format_size(stats.total_bytes));
+        println!(
+            "     Duration:         {:.1}s ({:.1} MB/s)",
+            elapsed.as_secs_f64(),
+            rate
+        );
+        println!();
     }
-    if stats.duplicates_skipped > 0 {
-        println!("     Duplicates:       {}", stats.duplicates_skipped);
-    }
-    if stats.errors > 0 {
-        println!("     Errors:           {}", stats.errors);
-    }
-    println!("     Total size:       {}", format_size(stats.total_bytes));
-    println!(
-        "     Duration:         {:.1}s ({:.1} MB/s)",
-        elapsed.as_secs_f64(),
-        rate
-    );
-    println!();
 
     Ok(stats)
 }
@@ -457,10 +532,18 @@ fn format_size(bytes: u64) -> String {
     }
 }
 
-/// Find all photos on the device recursively
-fn find_all_photos(content: &DeviceContent, dcim_only: bool) -> Result<Vec<PhotoInfo>> {
+/// Find all photos on the device recursively with optional progress display
+fn find_all_photos_with_progress(
+    content: &DeviceContent,
+    dcim_only: bool,
+    quiet: bool,
+) -> Result<Vec<PhotoInfo>> {
     let mut photos = Vec::new();
-    let progress = ScanProgress::new();
+    let progress = if quiet {
+        None
+    } else {
+        Some(ScanProgress::new())
+    };
 
     let root_objects = content.enumerate_objects()?;
 
@@ -515,7 +598,7 @@ fn find_all_photos(content: &DeviceContent, dcim_only: bool) -> Result<Vec<Photo
                             if child_name_upper == "DCIM" && child.is_folder {
                                 debug!("Found DCIM folder inside '{}', scanning...", obj.name);
                                 found_dcim = true;
-                                scan_folder_recursive(
+                                scan_folder_recursive_quiet(
                                     content,
                                     child,
                                     "DCIM",
@@ -536,7 +619,7 @@ fn find_all_photos(content: &DeviceContent, dcim_only: bool) -> Result<Vec<Photo
                                 if child.is_folder && is_ios_photo_folder(&child.name) {
                                     debug!("Found photo folder '{}', scanning...", child.name);
                                     let path = child.name.clone();
-                                    scan_folder_recursive(
+                                    scan_folder_recursive_quiet(
                                         content,
                                         &child,
                                         &path,
@@ -551,7 +634,7 @@ fn find_all_photos(content: &DeviceContent, dcim_only: bool) -> Result<Vec<Photo
                         for child in children {
                             if child.is_folder {
                                 let path = format!("{}/{}", obj.name, child.name);
-                                scan_folder_recursive(
+                                scan_folder_recursive_quiet(
                                     content,
                                     &child,
                                     &path,
@@ -566,7 +649,9 @@ fn find_all_photos(content: &DeviceContent, dcim_only: bool) -> Result<Vec<Photo
                                     size: child.size,
                                     date_modified: child.date_modified.clone(),
                                 });
-                                progress.add_files(1);
+                                if let Some(ref p) = progress {
+                                    p.add_files(1);
+                                }
                             }
                         }
                     }
@@ -591,8 +676,45 @@ fn find_all_photos(content: &DeviceContent, dcim_only: bool) -> Result<Vec<Photo
         warn!("No photos found. Try running with --dcim-only false to scan all folders.");
     }
 
-    progress.finish();
+    if let Some(ref p) = progress {
+        p.finish();
+    }
     Ok(photos)
+}
+
+/// Scan folder recursively with optional progress tracking (for quiet mode support)
+fn scan_folder_recursive_quiet(
+    content: &DeviceContent,
+    folder: &DeviceObject,
+    path: &str,
+    photos: &mut Vec<PhotoInfo>,
+    progress: &Option<ScanProgress>,
+) -> Result<()> {
+    if let Some(ref p) = progress {
+        p.increment_folders();
+    }
+
+    let children = content.enumerate_children(&folder.object_id)?;
+
+    for child in children {
+        if child.is_folder {
+            let child_path = format!("{}/{}", path, child.name);
+            scan_folder_recursive_quiet(content, &child, &child_path, photos, progress)?;
+        } else if is_media_file(&child.name) {
+            photos.push(PhotoInfo {
+                object_id: child.object_id.clone(),
+                name: child.name.clone(),
+                path: format!("{}/{}", path, child.name),
+                size: child.size,
+                date_modified: child.date_modified.clone(),
+            });
+            if let Some(ref p) = progress {
+                p.add_files(1);
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// Check if a folder name looks like an iOS photo folder

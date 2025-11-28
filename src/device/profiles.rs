@@ -198,6 +198,50 @@ impl ProfileManager {
         Ok(())
     }
 
+    /// Get a profile by device ID without creating one
+    pub fn get_profile(&self, device_id: &str) -> Option<&DeviceProfile> {
+        self.database.profiles.get(device_id)
+    }
+
+    /// Check if a device already has a profile (without creating one)
+    ///
+    /// This is useful for determining which devices need profile setup
+    /// before starting parallel extraction.
+    pub fn has_profile(&self, device_id: &str) -> bool {
+        self.database.profiles.contains_key(device_id)
+    }
+
+    /// Check if a device needs profile creation
+    ///
+    /// Returns true if the device doesn't have a profile AND there's no
+    /// existing extraction profile in the backup folder that matches.
+    pub fn needs_profile_creation(&self, device: &DeviceInfo) -> bool {
+        // First check if we already have a profile in our database
+        if self.has_profile(&device.device_id) {
+            return false;
+        }
+
+        // Check if there's an existing extraction profile in the backup folder
+        // that matches this device's ID
+        if !self.config.backup_base_folder.as_os_str().is_empty()
+            && self.config.backup_base_folder.exists()
+        {
+            let tracking_config = TrackingConfig::default();
+            let profiles = scan_for_profiles(
+                &self.config.backup_base_folder,
+                &tracking_config.tracking_filename,
+            );
+
+            // If there's an exact match by device ID, we don't need to create a new profile
+            // (though the user may still be prompted to confirm using it)
+            if profiles.iter().any(|p| p.device_id == device.device_id) {
+                return false;
+            }
+        }
+
+        true
+    }
+
     /// Force sync profiles to backup folder (even if not dirty)
     ///
     /// Call this after loading profiles to ensure the backup copy is up to date.
@@ -591,5 +635,74 @@ mod tests {
         let config = DeviceProfilesConfig::default();
         let manager = ProfileManager::new(&config);
         assert!(manager.database.profiles.is_empty());
+    }
+
+    #[test]
+    fn test_has_profile() {
+        let config = DeviceProfilesConfig::default();
+        let mut manager = ProfileManager::new(&config);
+
+        // No profiles yet
+        assert!(!manager.has_profile("device-123"));
+
+        // Add a profile manually
+        let profile = DeviceProfile {
+            name: "Test iPhone".to_string(),
+            manufacturer: "Apple Inc.".to_string(),
+            model: "iPhone".to_string(),
+            output_folder: "Test_iPhone".to_string(),
+            first_seen: None,
+            last_seen: None,
+        };
+        manager
+            .database
+            .profiles
+            .insert("device-123".to_string(), profile);
+
+        // Now it should exist
+        assert!(manager.has_profile("device-123"));
+        assert!(!manager.has_profile("device-456"));
+    }
+
+    #[test]
+    fn test_needs_profile_creation() {
+        let config = DeviceProfilesConfig::default();
+        let mut manager = ProfileManager::new(&config);
+
+        let device = DeviceInfo {
+            device_id: "device-123".to_string(),
+            friendly_name: "Test iPhone".to_string(),
+            manufacturer: "Apple Inc.".to_string(),
+            model: "iPhone".to_string(),
+        };
+
+        // New device should need profile creation
+        assert!(manager.needs_profile_creation(&device));
+
+        // Add a profile for this device
+        let profile = DeviceProfile {
+            name: "Test iPhone".to_string(),
+            manufacturer: "Apple Inc.".to_string(),
+            model: "iPhone".to_string(),
+            output_folder: "Test_iPhone".to_string(),
+            first_seen: None,
+            last_seen: None,
+        };
+        manager
+            .database
+            .profiles
+            .insert("device-123".to_string(), profile);
+
+        // Now it should NOT need profile creation
+        assert!(!manager.needs_profile_creation(&device));
+
+        // A different device should still need profile creation
+        let other_device = DeviceInfo {
+            device_id: "device-456".to_string(),
+            friendly_name: "Other iPhone".to_string(),
+            manufacturer: "Apple Inc.".to_string(),
+            model: "iPhone".to_string(),
+        };
+        assert!(manager.needs_profile_creation(&other_device));
     }
 }

@@ -7,21 +7,89 @@ use crate::cli::{Args, Commands, TestCommands};
 use crate::core::config::{
     get_config_path, init_config, open_config_in_editor, Config, TrackingConfig,
 };
-use crate::core::extractor;
+use crate::core::extractor::{self, ExtractionStats};
 use crate::core::setup::run_setup_wizard;
 use crate::core::tracking::scan_for_profiles;
 use crate::device::traits::{DeviceContentTrait, DeviceManagerTrait};
-use crate::device::{self, ProfileManager};
+use crate::device::{self, DeviceInfo, ProfileManager};
 use crate::testdb::{
     self, InteractiveTestMode, MockDataGenerator, ScenarioLibrary, TestRunner, TestRunnerConfig,
 };
 use anyhow::Result;
+use indicatif::{ProgressBar, ProgressStyle};
 use log::{debug, error, info, warn};
 use std::fs;
 use std::io::{self, Write};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::thread;
+use std::time::{Duration, Instant};
+
+/// Result of extraction from a single device (for parallel extraction reporting)
+#[derive(Debug, Clone)]
+struct DeviceExtractionResult {
+    /// Device friendly name
+    device_name: String,
+    /// Profile name (if available)
+    profile_name: Option<String>,
+    /// Output directory used
+    output_dir: PathBuf,
+    /// Extraction statistics
+    stats: Option<ExtractionStats>,
+    /// Error message if extraction failed
+    error: Option<String>,
+    /// Duration of extraction
+    duration: Duration,
+}
+
+/// Shared progress state for parallel extraction
+struct SharedProgress {
+    /// Total files to process across all devices
+    total_files: AtomicUsize,
+    /// Files processed so far
+    files_processed: AtomicUsize,
+    /// Total bytes transferred
+    bytes_transferred: AtomicU64,
+    /// Number of devices completed
+    devices_completed: AtomicUsize,
+    /// Total number of devices
+    total_devices: usize,
+}
+
+impl SharedProgress {
+    fn new(total_devices: usize) -> Self {
+        Self {
+            total_files: AtomicUsize::new(0),
+            files_processed: AtomicUsize::new(0),
+            bytes_transferred: AtomicU64::new(0),
+            devices_completed: AtomicUsize::new(0),
+            total_devices,
+        }
+    }
+
+    fn add_total_files(&self, count: usize) {
+        self.total_files.fetch_add(count, Ordering::Relaxed);
+    }
+
+    fn add_processed(&self, count: usize, bytes: u64) {
+        self.files_processed.fetch_add(count, Ordering::Relaxed);
+        self.bytes_transferred.fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    fn mark_device_complete(&self) {
+        self.devices_completed.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn get_progress(&self) -> (usize, usize, u64, usize) {
+        (
+            self.files_processed.load(Ordering::Relaxed),
+            self.total_files.load(Ordering::Relaxed),
+            self.bytes_transferred.load(Ordering::Relaxed),
+            self.devices_completed.load(Ordering::Relaxed),
+        )
+    }
+}
 
 /// Run the appropriate command based on CLI arguments
 ///
@@ -711,41 +779,47 @@ pub fn extract_photos_with_args(
         return Ok(());
     }
 
-    // Select device
-    let target_device = select_device(&devices, &config.device.device_id)?;
-    debug!("Selected device: {}", target_device.friendly_name);
+    // Select device(s) - may return multiple for parallel extraction
+    let selected_devices = select_devices(&devices, &config.device.device_id)?;
 
-    // Determine output directory - use device profiles if enabled
-    let output_dir = if config.device_profiles.enabled {
-        let mut profile_manager = ProfileManager::new(&config.device_profiles);
-        profile_manager.load().ok(); // Ignore error if file doesn't exist
-
-        let profile = profile_manager.get_or_create_profile(target_device)?;
-        let output_path = config
-            .device_profiles
-            .backup_base_folder
-            .join(&profile.output_folder);
-
-        debug!(
-            "Using profile '{}' -> {}",
-            profile.name,
-            output_path.display()
-        );
-        output_path
-    } else {
-        config.output.directory.clone()
-    };
-
-    // Create output directory if it doesn't exist
-    if !output_dir.exists() {
-        std::fs::create_dir_all(&output_dir)?;
-        debug!("Created output directory: {}", output_dir.display());
+    if selected_devices.is_empty() {
+        return Ok(());
     }
 
-    // Convert config to extraction config
-    // Build duplicate detection config from CLI args or config file
-    let duplicate_detection = if detect_duplicates || !compare_folders.is_empty() {
-        // CLI args take precedence
+    // Build duplicate detection config
+    let duplicate_detection =
+        build_duplicate_config(config, detect_duplicates, compare_folders, duplicate_action);
+
+    // Extract from selected device(s)
+    if selected_devices.len() == 1 {
+        // Single device - extract directly
+        extract_from_single_device(
+            &selected_devices[0],
+            config,
+            duplicate_detection,
+            shutdown_flag,
+        )?;
+    } else {
+        // Multiple devices - ask about parallel extraction
+        extract_from_multiple_devices(
+            &selected_devices,
+            config,
+            duplicate_detection,
+            shutdown_flag,
+        )?;
+    }
+
+    Ok(())
+}
+
+/// Build duplicate detection configuration from CLI args and config
+fn build_duplicate_config(
+    config: &Config,
+    detect_duplicates: bool,
+    compare_folders: Vec<PathBuf>,
+    duplicate_action: Option<String>,
+) -> Option<crate::core::config::DuplicateDetectionConfig> {
+    if detect_duplicates || !compare_folders.is_empty() {
         let action = match duplicate_action.as_deref() {
             Some("skip") => crate::core::config::DuplicateAction::Skip,
             Some("rename") => crate::core::config::DuplicateAction::Rename,
@@ -781,7 +855,35 @@ pub fn extract_photos_with_args(
         Some(config.duplicate_detection.clone())
     } else {
         None
-    };
+    }
+}
+
+/// Extract from a single device
+fn extract_from_single_device(
+    device: &DeviceInfo,
+    config: &Config,
+    duplicate_detection: Option<crate::core::config::DuplicateDetectionConfig>,
+    shutdown_flag: Arc<AtomicBool>,
+) -> Result<ExtractionStats> {
+    extract_from_single_device_impl(device, config, duplicate_detection, shutdown_flag, false)
+}
+
+/// Internal implementation of single device extraction with quiet mode option
+fn extract_from_single_device_impl(
+    device: &DeviceInfo,
+    config: &Config,
+    duplicate_detection: Option<crate::core::config::DuplicateDetectionConfig>,
+    shutdown_flag: Arc<AtomicBool>,
+    quiet: bool,
+) -> Result<ExtractionStats> {
+    // Determine output directory
+    let output_dir = get_output_dir_for_device(device, config)?;
+
+    // Create output directory if it doesn't exist
+    if !output_dir.exists() {
+        std::fs::create_dir_all(&output_dir)?;
+        debug!("Created output directory: {}", output_dir.display());
+    }
 
     let extraction_config = extractor::ExtractionConfig {
         output_dir: output_dir.clone(),
@@ -794,11 +896,11 @@ pub fn extract_photos_with_args(
         } else {
             None
         },
+        quiet,
     };
 
-    let stats = extractor::extract_photos(target_device, extraction_config, shutdown_flag.clone())?;
+    let stats = extractor::extract_photos(device, extraction_config, shutdown_flag)?;
 
-    // Log summary at debug level for troubleshooting (user-facing output is in extractor)
     debug!(
         "Extraction finished: {} extracted, {} skipped, {} duplicates, {} errors, {} bytes",
         stats.files_extracted,
@@ -808,6 +910,450 @@ pub fn extract_photos_with_args(
         stats.total_bytes
     );
 
+    Ok(stats)
+}
+
+/// Extract from a single device with a pre-resolved output directory (for parallel extraction)
+fn extract_with_output_dir(
+    device: &DeviceInfo,
+    output_dir: PathBuf,
+    config: &Config,
+    duplicate_detection: Option<crate::core::config::DuplicateDetectionConfig>,
+    shutdown_flag: Arc<AtomicBool>,
+    progress: Option<Arc<SharedProgress>>,
+) -> Result<ExtractionStats> {
+    // Create output directory if it doesn't exist
+    if !output_dir.exists() {
+        std::fs::create_dir_all(&output_dir)?;
+        debug!("Created output directory: {}", output_dir.display());
+    }
+
+    let extraction_config = extractor::ExtractionConfig {
+        output_dir: output_dir.clone(),
+        dcim_only: config.extraction.dcim_only,
+        preserve_structure: config.output.preserve_structure,
+        skip_existing: config.output.skip_existing,
+        duplicate_detection,
+        tracking: if config.tracking.enabled {
+            Some(config.tracking.clone())
+        } else {
+            None
+        },
+        quiet: true, // Always quiet for parallel
+    };
+
+    // Create progress callback if we have shared progress
+    let progress_callback: Option<extractor::ProgressCallback> = progress.as_ref().map(|p| {
+        let progress_clone = Arc::clone(p);
+        Box::new(move |files: usize, bytes: u64| {
+            progress_clone.add_processed(files, bytes);
+        }) as extractor::ProgressCallback
+    });
+
+    // Create total files callback if we have shared progress
+    let total_files_callback: Option<extractor::TotalFilesCallback> = progress.map(|p| {
+        Box::new(move |total: usize| {
+            p.add_total_files(total);
+        }) as extractor::TotalFilesCallback
+    });
+
+    let stats = extractor::extract_photos_with_progress(
+        device,
+        extraction_config,
+        shutdown_flag,
+        progress_callback,
+        total_files_callback,
+    )?;
+
+    Ok(stats)
+}
+
+/// Get the output directory for a device (using profiles if enabled)
+fn get_output_dir_for_device(device: &DeviceInfo, config: &Config) -> Result<PathBuf> {
+    if config.device_profiles.enabled {
+        let mut profile_manager = ProfileManager::new(&config.device_profiles);
+        profile_manager.load().ok();
+
+        let profile = profile_manager.get_or_create_profile(device)?;
+        let output_path = config
+            .device_profiles
+            .backup_base_folder
+            .join(&profile.output_folder);
+
+        debug!(
+            "Using profile '{}' -> {}",
+            profile.name,
+            output_path.display()
+        );
+        Ok(output_path)
+    } else {
+        Ok(config.output.directory.clone())
+    }
+}
+
+/// Extract from multiple devices with option for parallel extraction
+fn extract_from_multiple_devices(
+    devices: &[DeviceInfo],
+    config: &Config,
+    duplicate_detection: Option<crate::core::config::DuplicateDetectionConfig>,
+    shutdown_flag: Arc<AtomicBool>,
+) -> Result<()> {
+    println!();
+    println!("╔══════════════════════════════════════════════════════════════════╗");
+    println!("║              📱 Multiple Devices Selected                        ║");
+    println!("╚══════════════════════════════════════════════════════════════════╝");
+    println!();
+
+    for (i, device) in devices.iter().enumerate() {
+        println!("  [{}] {}", i + 1, device.friendly_name);
+    }
+    println!();
+    println!("  How would you like to extract?");
+    println!();
+    println!("    [S] Sequential - Extract one device at a time (safer)");
+    println!("    [P] Parallel   - Extract all devices simultaneously (faster)");
+    println!("    [C] Cancel     - Don't extract");
+    println!();
+    print!("  Your choice [S/p/c]: ");
+    io::stdout().flush()?;
+
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    let choice = input.trim().to_lowercase();
+
+    match choice.as_str() {
+        "" | "s" | "sequential" => {
+            // Sequential extraction
+            println!();
+            println!("  Starting sequential extraction...");
+            println!();
+
+            let mut total_stats = ExtractionStats::default();
+
+            for (i, device) in devices.iter().enumerate() {
+                if shutdown_flag.load(Ordering::SeqCst) {
+                    println!("  ⚠ Extraction interrupted by user");
+                    break;
+                }
+
+                println!("  ─────────────────────────────────────────");
+                println!(
+                    "  📱 Device {}/{}: {}",
+                    i + 1,
+                    devices.len(),
+                    device.friendly_name
+                );
+                println!();
+
+                match extract_from_single_device(
+                    device,
+                    config,
+                    duplicate_detection.clone(),
+                    shutdown_flag.clone(),
+                ) {
+                    Ok(stats) => {
+                        total_stats.files_extracted += stats.files_extracted;
+                        total_stats.files_skipped += stats.files_skipped;
+                        total_stats.duplicates_skipped += stats.duplicates_skipped;
+                        total_stats.errors += stats.errors;
+                        total_stats.total_bytes += stats.total_bytes;
+                    }
+                    Err(e) => {
+                        println!("  ✗ Error extracting from {}: {}", device.friendly_name, e);
+                        total_stats.errors += 1;
+                    }
+                }
+            }
+
+            // Print combined summary
+            if devices.len() > 1 {
+                println!();
+                println!("  ═══════════════════════════════════════════");
+                println!("  📊 Combined Results ({} devices):", devices.len());
+                println!("     Total extracted:  {}", total_stats.files_extracted);
+                println!("     Total skipped:    {}", total_stats.files_skipped);
+                if total_stats.duplicates_skipped > 0 {
+                    println!("     Total duplicates: {}", total_stats.duplicates_skipped);
+                }
+                if total_stats.errors > 0 {
+                    println!("     Total errors:     {}", total_stats.errors);
+                }
+                println!(
+                    "     Total size:       {}",
+                    format_bytes(total_stats.total_bytes)
+                );
+                println!();
+            }
+        }
+        "p" | "parallel" => {
+            // Parallel extraction
+
+            // ================================================================
+            // STEP 1: Pre-resolve ALL profiles/output directories BEFORE
+            // spawning any threads. This ensures no interactive prompts
+            // happen during parallel execution.
+            // ================================================================
+            println!();
+            println!("  📋 Preparing devices for parallel extraction...");
+            println!();
+
+            let mut devices_ready: Vec<(DeviceInfo, String, PathBuf)> = Vec::new();
+
+            for (i, device) in devices.iter().enumerate() {
+                println!(
+                    "  [{}/{}] Setting up: {}",
+                    i + 1,
+                    devices.len(),
+                    device.friendly_name
+                );
+
+                // This will prompt for profile if needed (sequentially, before parallel starts)
+                match get_output_dir_for_device(device, config) {
+                    Ok(output_dir) => {
+                        let profile_name = get_device_profile_hint(device, config)
+                            .unwrap_or_else(|| device.friendly_name.clone());
+                        println!("        → {} ({})", profile_name, output_dir.display());
+                        devices_ready.push((device.clone(), profile_name, output_dir));
+                    }
+                    Err(e) => {
+                        println!("        ✗ Failed to setup: {}", e);
+                        return Err(anyhow::anyhow!(
+                            "Failed to setup device {}: {}",
+                            device.friendly_name,
+                            e
+                        ));
+                    }
+                }
+            }
+
+            println!();
+            println!(
+                "  🚀 Starting parallel extraction of {} devices...",
+                devices_ready.len()
+            );
+            println!();
+
+            // Create shared progress tracker
+            let shared_progress = Arc::new(SharedProgress::new(devices_ready.len()));
+
+            // Create progress bar
+            let progress_bar = ProgressBar::new(100);
+            progress_bar.set_style(
+                ProgressStyle::default_bar()
+                    .template("  {spinner:.green} [{bar:40.cyan/blue}] {pos}% | {msg}")
+                    .unwrap()
+                    .progress_chars("━━╾─"),
+            );
+            progress_bar.enable_steady_tick(Duration::from_millis(100));
+
+            let parallel_start = Instant::now();
+
+            let config_clone = config.clone();
+            let dup_config = duplicate_detection.clone();
+
+            // Spawn threads for each device (quiet mode - no console output)
+            let handles: Vec<_> = devices_ready
+                .into_iter()
+                .map(|(device, profile_name, output_dir)| {
+                    let cfg = config_clone.clone();
+                    let dup = dup_config.clone();
+                    let flag = shutdown_flag.clone();
+                    let device_name = device.friendly_name.clone();
+                    let output_dir_clone = output_dir.clone();
+                    let progress = Arc::clone(&shared_progress);
+
+                    thread::spawn(move || {
+                        let start = Instant::now();
+
+                        // Each thread needs its own COM initialization
+                        let _com = match device::initialize_com() {
+                            Ok(guard) => guard,
+                            Err(e) => {
+                                progress.mark_device_complete();
+                                return DeviceExtractionResult {
+                                    device_name,
+                                    profile_name: Some(profile_name),
+                                    output_dir,
+                                    stats: None,
+                                    error: Some(format!("COM init failed: {}", e)),
+                                    duration: start.elapsed(),
+                                };
+                            }
+                        };
+
+                        match extract_with_output_dir(
+                            &device,
+                            output_dir_clone,
+                            &cfg,
+                            dup,
+                            flag,
+                            Some(Arc::clone(&progress)),
+                        ) {
+                            Ok(stats) => {
+                                progress.mark_device_complete();
+                                DeviceExtractionResult {
+                                    device_name,
+                                    profile_name: Some(profile_name),
+                                    output_dir,
+                                    stats: Some(stats),
+                                    error: None,
+                                    duration: start.elapsed(),
+                                }
+                            }
+                            Err(e) => {
+                                progress.mark_device_complete();
+                                DeviceExtractionResult {
+                                    device_name,
+                                    profile_name: Some(profile_name),
+                                    output_dir,
+                                    stats: None,
+                                    error: Some(format!("{}", e)),
+                                    duration: start.elapsed(),
+                                }
+                            }
+                        }
+                    })
+                })
+                .collect();
+
+            // Update progress bar while threads are running
+            let total_devices = shared_progress.total_devices;
+            loop {
+                let (processed, total, bytes, completed) = shared_progress.get_progress();
+
+                if completed >= total_devices {
+                    break;
+                }
+
+                let percent = if total > 0 {
+                    (processed * 100 / total).min(99)
+                } else {
+                    0
+                };
+
+                progress_bar.set_position(percent as u64);
+                progress_bar.set_message(format!(
+                    "{}/{} files | {} | {}/{} devices",
+                    processed,
+                    total,
+                    format_bytes(bytes),
+                    completed,
+                    total_devices
+                ));
+
+                thread::sleep(Duration::from_millis(100));
+            }
+
+            // Collect results
+            let mut results: Vec<DeviceExtractionResult> = Vec::new();
+            for handle in handles {
+                match handle.join() {
+                    Ok(result) => results.push(result),
+                    Err(_) => results.push(DeviceExtractionResult {
+                        device_name: "Unknown".to_string(),
+                        profile_name: None,
+                        output_dir: PathBuf::new(),
+                        stats: None,
+                        error: Some("Thread panicked".to_string()),
+                        duration: Duration::ZERO,
+                    }),
+                }
+            }
+
+            let total_duration = parallel_start.elapsed();
+
+            // Final progress update
+            progress_bar.set_position(100);
+            progress_bar.set_style(
+                ProgressStyle::default_bar()
+                    .template("  ✓ [{bar:40.green}] 100% | Complete")
+                    .unwrap()
+                    .progress_chars("━━━"),
+            );
+            progress_bar.finish();
+
+            // Print consolidated results
+            println!();
+            println!("  ╔══════════════════════════════════════════════════════════════════╗");
+            println!("  ║              📊 Parallel Extraction Complete                     ║");
+            println!("  ╚══════════════════════════════════════════════════════════════════╝");
+            println!();
+
+            // Per-device results
+            let mut total_stats = ExtractionStats::default();
+            let mut success_count = 0;
+            let mut error_count = 0;
+
+            for (i, result) in results.iter().enumerate() {
+                let display_name = result.profile_name.as_ref().unwrap_or(&result.device_name);
+
+                println!("  ┌─ Device {}: {}", i + 1, display_name);
+
+                if let Some(ref stats) = result.stats {
+                    success_count += 1;
+                    total_stats.files_extracted += stats.files_extracted;
+                    total_stats.files_skipped += stats.files_skipped;
+                    total_stats.duplicates_skipped += stats.duplicates_skipped;
+                    total_stats.errors += stats.errors;
+                    total_stats.total_bytes += stats.total_bytes;
+
+                    println!("  │  📁 {}", result.output_dir.display());
+                    println!(
+                        "  │  ✓ Extracted: {}  Skipped: {}  Size: {}",
+                        stats.files_extracted,
+                        stats.files_skipped,
+                        format_bytes(stats.total_bytes)
+                    );
+                    println!("  │  ⏱ Duration: {:.1}s", result.duration.as_secs_f64());
+                } else if let Some(ref err) = result.error {
+                    error_count += 1;
+                    println!("  │  ✗ Error: {}", err);
+                }
+                println!("  └─────────────────────────────────────────");
+                println!();
+            }
+
+            // Combined totals
+            println!("  ═══════════════════════════════════════════");
+            println!("  📈 Combined Results:");
+            println!(
+                "     Devices succeeded:  {}/{}",
+                success_count,
+                results.len()
+            );
+            if error_count > 0 {
+                println!("     Devices failed:     {}", error_count);
+            }
+            println!("     Total extracted:    {}", total_stats.files_extracted);
+            println!("     Total skipped:      {}", total_stats.files_skipped);
+            if total_stats.duplicates_skipped > 0 {
+                println!(
+                    "     Total duplicates:   {}",
+                    total_stats.duplicates_skipped
+                );
+            }
+            println!(
+                "     Total size:         {}",
+                format_bytes(total_stats.total_bytes)
+            );
+            println!(
+                "     Total time:         {:.1}s",
+                total_duration.as_secs_f64()
+            );
+            println!();
+        }
+        "c" | "cancel" | "q" | "quit" => {
+            println!();
+            println!("  Extraction cancelled.");
+            println!();
+        }
+        _ => {
+            println!();
+            println!("  Invalid choice. Extraction cancelled.");
+            println!();
+        }
+    }
+
     Ok(())
 }
 
@@ -815,13 +1361,168 @@ pub fn extract_photos_with_args(
 // Helper functions
 // ============================================================================
 
-/// Select a device from the list based on device ID or return single device
+/// Select device(s) from the list - supports interactive multi-selection
+fn select_devices(devices: &[DeviceInfo], device_id: &Option<String>) -> Result<Vec<DeviceInfo>> {
+    if let Some(ref id) = device_id {
+        // Specific device requested - try to find by ID or name
+        let device = devices
+            .iter()
+            .find(|d| d.device_id == *id || d.friendly_name.contains(id))
+            .ok_or_else(|| anyhow::anyhow!("Device '{}' not found", id))?;
+        Ok(vec![device.clone()])
+    } else if devices.len() == 1 {
+        // Only one device - use it
+        Ok(vec![devices[0].clone()])
+    } else {
+        // Multiple devices - show interactive selection
+        select_devices_interactive(devices)
+    }
+}
+
+/// Interactive device selection menu
+fn select_devices_interactive(devices: &[DeviceInfo]) -> Result<Vec<DeviceInfo>> {
+    println!();
+    println!("╔══════════════════════════════════════════════════════════════════╗");
+    println!("║              📱 Multiple Devices Detected                        ║");
+    println!("╚══════════════════════════════════════════════════════════════════╝");
+    println!();
+
+    // Try to get profile names for better display
+    // We need config for this, so we load it here
+    let config = Config::load_default().unwrap_or_default();
+
+    for (i, device) in devices.iter().enumerate() {
+        // Try to identify the device by any existing profile
+        let profile_hint = get_device_profile_hint(device, &config);
+        if let Some(hint) = profile_hint {
+            println!("  [{}] {} → {}", i + 1, device.friendly_name, hint);
+        } else {
+            println!("  [{}] {} (new device)", i + 1, device.friendly_name);
+        }
+    }
+
+    println!();
+    println!("  [A] Extract from ALL devices");
+    println!("  [0] Cancel");
+    println!();
+    print!("  Select device(s) [1-{}, A, or 0]: ", devices.len());
+    io::stdout().flush()?;
+
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    let choice = input.trim().to_lowercase();
+
+    match choice.as_str() {
+        "0" | "q" | "quit" | "cancel" => {
+            println!();
+            println!("  Extraction cancelled.");
+            Ok(vec![])
+        }
+        "a" | "all" => {
+            // Return all devices
+            Ok(devices.to_vec())
+        }
+        _ => {
+            // Try to parse as number(s)
+            // Support formats: "1", "1,2", "1 2", "1-3"
+            let mut selected = Vec::new();
+
+            // Handle range format (e.g., "1-3")
+            if choice.contains('-') && !choice.starts_with('-') {
+                let parts: Vec<&str> = choice.split('-').collect();
+                if parts.len() == 2 {
+                    if let (Ok(start), Ok(end)) =
+                        (parts[0].parse::<usize>(), parts[1].parse::<usize>())
+                    {
+                        for i in start..=end {
+                            if i >= 1 && i <= devices.len() {
+                                selected.push(devices[i - 1].clone());
+                            }
+                        }
+                    }
+                }
+            } else {
+                // Handle comma or space separated (e.g., "1,2" or "1 2")
+                let nums: Vec<&str> = choice.split(|c| c == ',' || c == ' ').collect();
+                for num_str in nums {
+                    let num_str = num_str.trim();
+                    if num_str.is_empty() {
+                        continue;
+                    }
+                    if let Ok(num) = num_str.parse::<usize>() {
+                        if num >= 1 && num <= devices.len() {
+                            let device = &devices[num - 1];
+                            // Avoid duplicates
+                            if !selected
+                                .iter()
+                                .any(|d: &DeviceInfo| d.device_id == device.device_id)
+                            {
+                                selected.push(device.clone());
+                            }
+                        }
+                    }
+                }
+            }
+
+            if selected.is_empty() {
+                println!();
+                println!(
+                    "  ⚠ Invalid selection. Please enter a number between 1 and {}.",
+                    devices.len()
+                );
+                println!();
+                // Retry
+                select_devices_interactive(devices)
+            } else {
+                Ok(selected)
+            }
+        }
+    }
+}
+
+/// Try to get a profile hint for a device (e.g., the profile name)
+fn get_device_profile_hint(device: &DeviceInfo, config: &Config) -> Option<String> {
+    // Try to load existing profiles to find a name for this device
+    if config.device_profiles.enabled {
+        let mut profile_manager = ProfileManager::new(&config.device_profiles);
+        if profile_manager.load().is_ok() {
+            // Check if we have a profile for this device
+            if let Some(profile) = profile_manager.get_profile(&device.device_id) {
+                return Some(profile.name.clone());
+            }
+        }
+    }
+
+    // Also scan for extraction profiles in the backup folder
+    if !config
+        .device_profiles
+        .backup_base_folder
+        .as_os_str()
+        .is_empty()
+    {
+        use crate::core::tracking::scan_for_profiles;
+        let profiles = scan_for_profiles(
+            &config.device_profiles.backup_base_folder,
+            &config.tracking.tracking_filename,
+        );
+
+        // Check if any profile matches this device ID
+        for profile in profiles {
+            if profile.device_id == device.device_id {
+                return Some(profile.friendly_name);
+            }
+        }
+    }
+
+    None
+}
+
+/// Select a single device from the list (legacy helper for other commands)
 fn select_device<'a>(
     devices: &'a [device::DeviceInfo],
     device_id: &Option<String>,
 ) -> Result<&'a device::DeviceInfo> {
     if let Some(ref id) = device_id {
-        // Try to find by ID or name
         devices
             .iter()
             .find(|d| d.device_id == *id || d.friendly_name.contains(id))
@@ -829,19 +1530,15 @@ fn select_device<'a>(
     } else if devices.len() == 1 {
         Ok(&devices[0])
     } else {
-        info!("Multiple devices found. Please specify a device with --device-id:");
-        info!("");
-        for device in devices {
-            info!("  {} (ID: {})", device.friendly_name, device.device_id);
-        }
-        info!("");
-        info!(
-            "Example: photo_extraction_tool --device-id \"{}\"",
-            devices[0].device_id
+        // For non-extraction commands, just pick the first one with a note
+        println!();
+        println!(
+            "  ℹ Multiple devices found, using first one: {}",
+            devices[0].friendly_name
         );
-        Err(anyhow::anyhow!(
-            "Multiple devices found, please specify one"
-        ))
+        println!("    Use --device-id to specify a different device.");
+        println!();
+        Ok(&devices[0])
     }
 }
 
