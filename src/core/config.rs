@@ -137,6 +137,9 @@ pub struct Config {
     /// Extraction settings
     pub extraction: ExtractionConfig,
 
+    /// Android-specific extraction settings
+    pub android: AndroidConfig,
+
     /// Logging settings
     pub logging: LoggingConfig,
 
@@ -311,6 +314,319 @@ pub struct TrackingConfig {
 
     /// Track individual files that have been extracted
     pub track_extracted_files: bool,
+}
+
+/// Android-specific extraction configuration
+///
+/// These settings control how photos are extracted from Android devices.
+/// Android devices have a different folder structure than iOS devices.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AndroidConfig {
+    /// Preserve the folder structure from the Android device
+    /// When true: maintains Camera/, Screenshots/, Pictures/ structure
+    /// When false: extracts all photos to a flat directory
+    pub preserve_structure: bool,
+
+    /// Include photos from DCIM/Camera folder (main camera photos)
+    pub include_camera: bool,
+
+    /// Include screenshots from DCIM/Screenshots or Pictures/Screenshots
+    pub include_screenshots: bool,
+
+    /// Include photos from Pictures folder
+    pub include_pictures: bool,
+
+    /// Include images from Download folder
+    pub include_downloads: bool,
+
+    /// Exclude Android thumbnail/cache folders (.thumbnails, .trash, etc.)
+    /// This is enabled by default and recommended to keep enabled
+    pub exclude_cache_folders: bool,
+
+    // ── App-specific media folder support ──────────────────────────────────
+    /// Include WhatsApp media (images and videos from WhatsApp/Media)
+    #[serde(default)]
+    pub include_whatsapp: bool,
+
+    /// Include Telegram media (images and videos from Telegram folder)
+    #[serde(default)]
+    pub include_telegram: bool,
+
+    /// Include Instagram media (saved/cached images)
+    #[serde(default)]
+    pub include_instagram: bool,
+
+    /// Include Facebook/Messenger media
+    #[serde(default)]
+    pub include_facebook: bool,
+
+    /// Include Snapchat memories and media
+    #[serde(default)]
+    pub include_snapchat: bool,
+
+    /// Include TikTok saved videos
+    #[serde(default)]
+    pub include_tiktok: bool,
+
+    /// Include Signal messenger media
+    #[serde(default)]
+    pub include_signal: bool,
+
+    /// Include Viber messenger media
+    #[serde(default)]
+    pub include_viber: bool,
+
+    // ── Custom folder configuration ────────────────────────────────────────
+    /// List of additional folders to include (relative to Internal Storage)
+    /// Example: ["WhatsApp/Media/WhatsApp Images", "Telegram/Telegram Images"]
+    pub additional_folders: Vec<String>,
+
+    /// List of folder names to exclude (will be skipped during extraction)
+    /// Default excludes: .thumbnails, .trash, .cache
+    pub exclude_folders: Vec<String>,
+}
+
+/// Known folder paths for popular Android apps
+/// These are relative to Internal Storage
+/// Note: Many manufacturers (Xiaomi, Samsung, etc.) use different folder structures,
+/// and Android 11+ uses scoped storage under Android/media/
+/// so we include multiple alternative paths for each app.
+pub mod app_folders {
+    // =========================================================================
+    // WHATSAPP (Personal)
+    // =========================================================================
+    /// WhatsApp media folders - standard location (Android 10 and earlier)
+    pub const WHATSAPP_IMAGES: &str = "WhatsApp/Media/WhatsApp Images";
+    pub const WHATSAPP_VIDEO: &str = "WhatsApp/Media/WhatsApp Video";
+    pub const WHATSAPP_ANIMATED_GIFS: &str = "WhatsApp/Media/WhatsApp Animated Gifs";
+    pub const WHATSAPP_DOCUMENTS: &str = "WhatsApp/Media/WhatsApp Documents";
+    /// WhatsApp alternative locations (Xiaomi, some Samsung devices)
+    pub const WHATSAPP_PICTURES: &str = "Pictures/WhatsApp";
+    pub const WHATSAPP_DCIM: &str = "DCIM/WhatsApp";
+    /// WhatsApp Android 11+ scoped storage location
+    pub const WHATSAPP_SCOPED_IMAGES: &str =
+        "Android/media/com.whatsapp/WhatsApp/Media/WhatsApp Images";
+    pub const WHATSAPP_SCOPED_VIDEO: &str =
+        "Android/media/com.whatsapp/WhatsApp/Media/WhatsApp Video";
+    pub const WHATSAPP_SCOPED_GIFS: &str =
+        "Android/media/com.whatsapp/WhatsApp/Media/WhatsApp Animated Gifs";
+
+    // =========================================================================
+    // WHATSAPP BUSINESS
+    // =========================================================================
+    /// WhatsApp Business - standard location
+    pub const WHATSAPP_BIZ_IMAGES: &str = "WhatsApp Business/Media/WhatsApp Business Images";
+    pub const WHATSAPP_BIZ_VIDEO: &str = "WhatsApp Business/Media/WhatsApp Business Video";
+    pub const WHATSAPP_BIZ_GIFS: &str = "WhatsApp Business/Media/WhatsApp Business Animated Gifs";
+    /// WhatsApp Business - alternative locations
+    pub const WHATSAPP_BIZ_PICTURES: &str = "Pictures/WhatsApp Business";
+    /// WhatsApp Business Android 11+ scoped storage
+    pub const WHATSAPP_BIZ_SCOPED_IMAGES: &str =
+        "Android/media/com.whatsapp.w4b/WhatsApp Business/Media/WhatsApp Business Images";
+    pub const WHATSAPP_BIZ_SCOPED_VIDEO: &str =
+        "Android/media/com.whatsapp.w4b/WhatsApp Business/Media/WhatsApp Business Video";
+
+    // =========================================================================
+    // TELEGRAM
+    // =========================================================================
+    /// Telegram media folders - standard location
+    pub const TELEGRAM_IMAGES: &str = "Telegram/Telegram Images";
+    pub const TELEGRAM_VIDEO: &str = "Telegram/Telegram Video";
+    pub const TELEGRAM_DOCUMENTS: &str = "Telegram/Telegram Documents";
+    /// Telegram alternative locations
+    pub const TELEGRAM_PICTURES: &str = "Pictures/Telegram";
+    /// Telegram Android 11+ scoped storage
+    pub const TELEGRAM_SCOPED: &str =
+        "Android/media/org.telegram.messenger/Telegram/Telegram Images";
+    pub const TELEGRAM_SCOPED_VIDEO: &str =
+        "Android/media/org.telegram.messenger/Telegram/Telegram Video";
+
+    // =========================================================================
+    // INSTAGRAM
+    // =========================================================================
+    /// Instagram folders (may vary by device/version)
+    pub const INSTAGRAM: &str = "Pictures/Instagram";
+    pub const INSTAGRAM_ALT: &str = "DCIM/Instagram";
+    pub const INSTAGRAM_MOVIES: &str = "Movies/Instagram";
+    /// Instagram Android 11+ scoped storage
+    pub const INSTAGRAM_SCOPED: &str = "Android/media/com.instagram.android/Instagram";
+
+    // =========================================================================
+    // FACEBOOK / MESSENGER
+    // =========================================================================
+    /// Facebook/Messenger folders
+    pub const FACEBOOK: &str = "Pictures/Facebook";
+    pub const MESSENGER: &str = "Pictures/Messenger";
+    pub const FACEBOOK_DCIM: &str = "DCIM/Facebook";
+    /// Facebook Android 11+ scoped storage
+    pub const FACEBOOK_SCOPED: &str = "Android/media/com.facebook.katana/Facebook";
+    pub const MESSENGER_SCOPED: &str = "Android/media/com.facebook.orca/Messenger";
+
+    // =========================================================================
+    // SNAPCHAT
+    // =========================================================================
+    /// Snapchat folders
+    pub const SNAPCHAT: &str = "Snapchat";
+    pub const SNAPCHAT_ALT: &str = "Pictures/Snapchat";
+    pub const SNAPCHAT_DCIM: &str = "DCIM/Snapchat";
+    /// Snapchat Android 11+ scoped storage
+    pub const SNAPCHAT_SCOPED: &str = "Android/media/com.snapchat.android/Snapchat";
+
+    // =========================================================================
+    // TIKTOK
+    // =========================================================================
+    /// TikTok folders
+    pub const TIKTOK: &str = "Pictures/TikTok";
+    pub const TIKTOK_ALT: &str = "DCIM/TikTok";
+    pub const TIKTOK_MOVIES: &str = "Movies/TikTok";
+    /// TikTok Android 11+ scoped storage
+    pub const TIKTOK_SCOPED: &str = "Android/media/com.zhiliaoapp.musically/TikTok";
+
+    // =========================================================================
+    // SIGNAL
+    // =========================================================================
+    /// Signal messenger folders
+    pub const SIGNAL: &str = "Signal/Signal Photos";
+    pub const SIGNAL_VIDEO: &str = "Signal/Signal Video";
+    pub const SIGNAL_PICTURES: &str = "Pictures/Signal";
+    /// Signal Android 11+ scoped storage
+    pub const SIGNAL_SCOPED: &str = "Android/media/org.thoughtcrime.securesms/Signal";
+
+    // =========================================================================
+    // VIBER
+    // =========================================================================
+    /// Viber messenger folders
+    pub const VIBER_IMAGES: &str = "Viber/media/Viber Images";
+    pub const VIBER_VIDEO: &str = "Viber/media/Viber Video";
+    pub const VIBER_PICTURES: &str = "Pictures/Viber";
+    /// Viber Android 11+ scoped storage
+    pub const VIBER_SCOPED: &str = "Android/media/com.viber.voip/Viber";
+
+    /// Returns all known folder paths for a given app
+    /// Includes standard, alternative, and Android 11+ scoped storage locations
+    pub fn get_app_folders(app: &str) -> Vec<&'static str> {
+        match app.to_lowercase().as_str() {
+            "whatsapp" => vec![
+                // Standard locations
+                WHATSAPP_IMAGES,
+                WHATSAPP_VIDEO,
+                WHATSAPP_ANIMATED_GIFS,
+                WHATSAPP_DOCUMENTS,
+                // Alternative locations (Xiaomi, etc.)
+                WHATSAPP_PICTURES,
+                WHATSAPP_DCIM,
+                // Android 11+ scoped storage
+                WHATSAPP_SCOPED_IMAGES,
+                WHATSAPP_SCOPED_VIDEO,
+                WHATSAPP_SCOPED_GIFS,
+                // WhatsApp Business - all locations
+                WHATSAPP_BIZ_IMAGES,
+                WHATSAPP_BIZ_VIDEO,
+                WHATSAPP_BIZ_GIFS,
+                WHATSAPP_BIZ_PICTURES,
+                WHATSAPP_BIZ_SCOPED_IMAGES,
+                WHATSAPP_BIZ_SCOPED_VIDEO,
+            ],
+            "telegram" => vec![
+                TELEGRAM_IMAGES,
+                TELEGRAM_VIDEO,
+                TELEGRAM_DOCUMENTS,
+                TELEGRAM_PICTURES,
+                TELEGRAM_SCOPED,
+                TELEGRAM_SCOPED_VIDEO,
+            ],
+            "instagram" => vec![INSTAGRAM, INSTAGRAM_ALT, INSTAGRAM_MOVIES, INSTAGRAM_SCOPED],
+            "facebook" => vec![
+                FACEBOOK,
+                MESSENGER,
+                FACEBOOK_DCIM,
+                FACEBOOK_SCOPED,
+                MESSENGER_SCOPED,
+            ],
+            "snapchat" => vec![SNAPCHAT, SNAPCHAT_ALT, SNAPCHAT_DCIM, SNAPCHAT_SCOPED],
+            "tiktok" => vec![TIKTOK, TIKTOK_ALT, TIKTOK_MOVIES, TIKTOK_SCOPED],
+            "signal" => vec![SIGNAL, SIGNAL_VIDEO, SIGNAL_PICTURES, SIGNAL_SCOPED],
+            "viber" => vec![VIBER_IMAGES, VIBER_VIDEO, VIBER_PICTURES, VIBER_SCOPED],
+            _ => vec![],
+        }
+    }
+}
+
+impl Default for AndroidConfig {
+    fn default() -> Self {
+        Self {
+            preserve_structure: true,
+            include_camera: true,
+            include_screenshots: true,
+            include_pictures: true,
+            include_downloads: false,
+            exclude_cache_folders: true,
+            // App-specific defaults (all disabled by default)
+            include_whatsapp: false,
+            include_telegram: false,
+            include_instagram: false,
+            include_facebook: false,
+            include_snapchat: false,
+            include_tiktok: false,
+            include_signal: false,
+            include_viber: false,
+            // Custom folders
+            additional_folders: Vec::new(),
+            exclude_folders: vec![
+                ".thumbnails".to_string(),
+                ".trash".to_string(),
+                ".cache".to_string(),
+                ".nomedia".to_string(),
+            ],
+        }
+    }
+}
+
+impl AndroidConfig {
+    /// Get all enabled app folder paths based on current configuration
+    pub fn get_enabled_app_folders(&self) -> Vec<&'static str> {
+        let mut folders = Vec::new();
+
+        if self.include_whatsapp {
+            folders.extend(app_folders::get_app_folders("whatsapp"));
+        }
+        if self.include_telegram {
+            folders.extend(app_folders::get_app_folders("telegram"));
+        }
+        if self.include_instagram {
+            folders.extend(app_folders::get_app_folders("instagram"));
+        }
+        if self.include_facebook {
+            folders.extend(app_folders::get_app_folders("facebook"));
+        }
+        if self.include_snapchat {
+            folders.extend(app_folders::get_app_folders("snapchat"));
+        }
+        if self.include_tiktok {
+            folders.extend(app_folders::get_app_folders("tiktok"));
+        }
+        if self.include_signal {
+            folders.extend(app_folders::get_app_folders("signal"));
+        }
+        if self.include_viber {
+            folders.extend(app_folders::get_app_folders("viber"));
+        }
+
+        folders
+    }
+
+    /// Check if any app-specific folder extraction is enabled
+    pub fn has_app_folders_enabled(&self) -> bool {
+        self.include_whatsapp
+            || self.include_telegram
+            || self.include_instagram
+            || self.include_facebook
+            || self.include_snapchat
+            || self.include_tiktok
+            || self.include_signal
+            || self.include_viber
+    }
 }
 
 impl Default for DeviceProfilesConfig {
@@ -610,3 +926,142 @@ impl std::fmt::Display for ConfigError {
 }
 
 impl std::error::Error for ConfigError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_android_config_defaults() {
+        let config = AndroidConfig::default();
+        assert!(config.preserve_structure);
+        assert!(config.include_camera);
+        assert!(config.include_screenshots);
+        assert!(config.include_pictures);
+        assert!(!config.include_downloads);
+        assert!(config.exclude_cache_folders);
+        // All app folders disabled by default
+        assert!(!config.include_whatsapp);
+        assert!(!config.include_telegram);
+        assert!(!config.include_instagram);
+        assert!(!config.include_facebook);
+        assert!(!config.include_snapchat);
+        assert!(!config.include_tiktok);
+        assert!(!config.include_signal);
+        assert!(!config.include_viber);
+    }
+
+    #[test]
+    fn test_has_app_folders_enabled_none() {
+        let config = AndroidConfig::default();
+        assert!(!config.has_app_folders_enabled());
+    }
+
+    #[test]
+    fn test_has_app_folders_enabled_whatsapp() {
+        let mut config = AndroidConfig::default();
+        config.include_whatsapp = true;
+        assert!(config.has_app_folders_enabled());
+    }
+
+    #[test]
+    fn test_has_app_folders_enabled_multiple() {
+        let mut config = AndroidConfig::default();
+        config.include_telegram = true;
+        config.include_signal = true;
+        assert!(config.has_app_folders_enabled());
+    }
+
+    #[test]
+    fn test_get_enabled_app_folders_empty() {
+        let config = AndroidConfig::default();
+        let folders = config.get_enabled_app_folders();
+        assert!(folders.is_empty());
+    }
+
+    #[test]
+    fn test_get_enabled_app_folders_whatsapp() {
+        let mut config = AndroidConfig::default();
+        config.include_whatsapp = true;
+        let folders = config.get_enabled_app_folders();
+        // WhatsApp personal: 9 paths + WhatsApp Business: 6 paths = 15 total
+        assert_eq!(folders.len(), 15);
+        // Check some key paths exist
+        assert!(folders.contains(&app_folders::WHATSAPP_IMAGES));
+        assert!(folders.contains(&app_folders::WHATSAPP_VIDEO));
+        assert!(folders.contains(&app_folders::WHATSAPP_PICTURES));
+        assert!(folders.contains(&app_folders::WHATSAPP_SCOPED_IMAGES));
+        assert!(folders.contains(&app_folders::WHATSAPP_BIZ_IMAGES));
+        assert!(folders.contains(&app_folders::WHATSAPP_BIZ_SCOPED_IMAGES));
+    }
+
+    #[test]
+    fn test_get_enabled_app_folders_telegram() {
+        let mut config = AndroidConfig::default();
+        config.include_telegram = true;
+        let folders = config.get_enabled_app_folders();
+        assert_eq!(folders.len(), 6); // Standard + alternative + scoped
+        assert!(folders.contains(&app_folders::TELEGRAM_IMAGES));
+        assert!(folders.contains(&app_folders::TELEGRAM_VIDEO));
+        assert!(folders.contains(&app_folders::TELEGRAM_PICTURES));
+        assert!(folders.contains(&app_folders::TELEGRAM_SCOPED));
+    }
+
+    #[test]
+    fn test_get_enabled_app_folders_multiple_apps() {
+        let mut config = AndroidConfig::default();
+        config.include_whatsapp = true;
+        config.include_telegram = true;
+        config.include_signal = true;
+        let folders = config.get_enabled_app_folders();
+        // WhatsApp: 15, Telegram: 6, Signal: 4
+        assert_eq!(folders.len(), 25);
+    }
+
+    #[test]
+    fn test_get_enabled_app_folders_all_apps() {
+        let mut config = AndroidConfig::default();
+        config.include_whatsapp = true;
+        config.include_telegram = true;
+        config.include_instagram = true;
+        config.include_facebook = true;
+        config.include_snapchat = true;
+        config.include_tiktok = true;
+        config.include_signal = true;
+        config.include_viber = true;
+        let folders = config.get_enabled_app_folders();
+        // WhatsApp: 15, Telegram: 6, Instagram: 4, Facebook: 5, Snapchat: 4, TikTok: 4, Signal: 4, Viber: 4
+        assert_eq!(folders.len(), 46);
+    }
+
+    #[test]
+    fn test_app_folders_get_app_folders_unknown() {
+        let folders = app_folders::get_app_folders("unknown_app");
+        assert!(folders.is_empty());
+    }
+
+    #[test]
+    fn test_app_folders_constants() {
+        // Verify key folder paths are correctly defined
+        assert_eq!(
+            app_folders::WHATSAPP_IMAGES,
+            "WhatsApp/Media/WhatsApp Images"
+        );
+        assert_eq!(
+            app_folders::WHATSAPP_SCOPED_IMAGES,
+            "Android/media/com.whatsapp/WhatsApp/Media/WhatsApp Images"
+        );
+        assert_eq!(
+            app_folders::WHATSAPP_BIZ_IMAGES,
+            "WhatsApp Business/Media/WhatsApp Business Images"
+        );
+        assert_eq!(app_folders::TELEGRAM_IMAGES, "Telegram/Telegram Images");
+        assert_eq!(
+            app_folders::TELEGRAM_SCOPED,
+            "Android/media/org.telegram.messenger/Telegram/Telegram Images"
+        );
+        assert_eq!(app_folders::INSTAGRAM, "Pictures/Instagram");
+        assert_eq!(app_folders::SIGNAL, "Signal/Signal Photos");
+        assert_eq!(app_folders::VIBER_IMAGES, "Viber/media/Viber Images");
+    }
+}

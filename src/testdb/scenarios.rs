@@ -244,6 +244,295 @@ impl ScenarioLibrary {
         .with_tags(vec!["device", "iphone", "mixed"])
     }
 
+    // =========================================================================
+    // ANDROID DEVICE SCENARIOS
+    // =========================================================================
+
+    /// Scenario: Samsung Galaxy phone
+    pub fn samsung_galaxy() -> TestScenario {
+        let device = DeviceInfo::new(
+            "\\\\?\\usb#vid_04e8&pid_6860#samsung_serial",
+            "Galaxy S24 Ultra",
+            "Samsung",
+            "SM-S928B",
+        );
+
+        let mut fs = MockFileSystem::new();
+        fs.add_android_dcim_structure(50);
+
+        TestScenario::new(
+            "samsung_galaxy",
+            "Samsung Galaxy phone with standard Android structure",
+            device,
+            fs,
+            ExpectedResults {
+                files_to_extract: 50,
+                folders: 3, // Internal Storage, DCIM, Camera
+                total_size: 50 * 1024 * 1024,
+                should_succeed: true,
+                ..Default::default()
+            },
+        )
+        .with_tags(vec!["device", "android", "samsung", "basic"])
+    }
+
+    /// Scenario: Google Pixel phone
+    pub fn google_pixel() -> TestScenario {
+        let device = DeviceInfo::new(
+            "\\\\?\\usb#vid_18d1&pid_4ee1#pixel_serial",
+            "Pixel 8 Pro",
+            "Google",
+            "Pixel 8 Pro",
+        );
+
+        let mut fs = MockFileSystem::new();
+        fs.add_android_dcim_structure(40);
+
+        TestScenario::new(
+            "google_pixel",
+            "Google Pixel phone with standard Android structure",
+            device,
+            fs,
+            ExpectedResults {
+                files_to_extract: 40,
+                folders: 3,
+                total_size: 40 * 1024 * 1024,
+                should_succeed: true,
+                ..Default::default()
+            },
+        )
+        .with_tags(vec!["device", "android", "pixel", "basic"])
+    }
+
+    /// Scenario: Android phone with full folder structure
+    pub fn android_full_structure() -> TestScenario {
+        let device = DeviceInfo::new(
+            "\\\\?\\usb#vid_2717&pid_ff48#xiaomi_serial",
+            "Xiaomi 14",
+            "Xiaomi",
+            "2401116SG",
+        );
+
+        let mut fs = MockFileSystem::new();
+        // Camera: 30, Screenshots: 10, Pictures: 5, Downloads: 3
+        fs.add_full_android_structure(30, 10, 5, 3);
+
+        TestScenario::new(
+            "android_full_structure",
+            "Android phone with multiple media folders (Camera, Screenshots, Pictures, Download)",
+            device,
+            fs,
+            ExpectedResults {
+                // 30 camera + 10 screenshots + 5 pictures + 3 downloads + 1 thumbnail (to skip)
+                files_to_extract: 48, // Excluding thumbnail
+                folders: 7, // Internal Storage, DCIM, Camera, Screenshots, Pictures, Download, .thumbnails
+                total_size: 48 * 1024 * 1024,
+                should_succeed: true,
+                ..Default::default()
+            },
+        )
+        .with_tags(vec!["device", "android", "structure", "comprehensive"])
+    }
+
+    /// Scenario: OnePlus phone
+    pub fn oneplus_phone() -> TestScenario {
+        let device = DeviceInfo::new(
+            "\\\\?\\usb#vid_2a70&pid_9011#oneplus_serial",
+            "OnePlus 12",
+            "OnePlus",
+            "LE2125",
+        );
+
+        let mut fs = MockFileSystem::new();
+        fs.add_android_dcim_structure(35);
+
+        TestScenario::new(
+            "oneplus_phone",
+            "OnePlus phone with standard Android structure",
+            device,
+            fs,
+            ExpectedResults {
+                files_to_extract: 35,
+                folders: 3,
+                total_size: 35 * 1024 * 1024,
+                should_succeed: true,
+                ..Default::default()
+            },
+        )
+        .with_tags(vec!["device", "android", "oneplus", "basic"])
+    }
+
+    /// Scenario: Android phone with messaging app media folders
+    ///
+    /// Tests extraction from WhatsApp, Telegram, Instagram, and Signal folders
+    pub fn android_with_app_folders() -> TestScenario {
+        let device = DeviceInfo::new(
+            "\\\\?\\usb#vid_04e8&pid_6860#samsung_apps_test",
+            "Galaxy S24 Ultra",
+            "Samsung",
+            "SM-S928B",
+        );
+
+        let mut fs = MockFileSystem::new();
+        // Camera: 20, Screenshots: 5, WhatsApp: 10, Telegram: 8
+        fs.add_android_with_apps(20, 5, 10, 8);
+
+        TestScenario::new(
+            "android_with_app_folders",
+            "Android phone with WhatsApp, Telegram, Instagram, Signal media folders",
+            device,
+            fs,
+            ExpectedResults {
+                // Camera: 20 + Screenshots: 5 + Pictures: 2 + WhatsApp images: 10 + WhatsApp videos: 2
+                // + Telegram: 8 + Instagram: 3 + Signal: 2 = 52 files
+                files_to_extract: 52,
+                folders: 14, // Many folders for all the apps
+                total_size: 52 * 1024 * 1024,
+                should_succeed: true,
+                ..Default::default()
+            },
+        )
+        .with_tags(vec![
+            "device",
+            "android",
+            "apps",
+            "whatsapp",
+            "telegram",
+            "instagram",
+            "signal",
+        ])
+    }
+
+    /// Scenario: Android with only WhatsApp media
+    pub fn android_whatsapp_only() -> TestScenario {
+        let device = DeviceInfo::new(
+            "\\\\?\\usb#vid_04e8&pid_6860#samsung_wa_test",
+            "Galaxy A54",
+            "Samsung",
+            "SM-A546B",
+        );
+
+        let mut fs = MockFileSystem::new();
+        // Add basic Android structure
+        fs.add_android_dcim_structure(10);
+        // Add only WhatsApp folders
+        fs.add_android_app_folders(
+            15, // WhatsApp images
+            5,  // WhatsApp videos
+            0,  // No Telegram
+            0,  // No Instagram
+            0,  // No Signal
+        );
+
+        TestScenario::new(
+            "android_whatsapp_only",
+            "Android phone with only WhatsApp media (common real-world scenario)",
+            device,
+            fs,
+            ExpectedResults {
+                // Camera: 10 + WhatsApp images: 15 + WhatsApp videos: 5 = 30
+                files_to_extract: 30,
+                folders: 6, // Internal Storage, DCIM, Camera, WhatsApp, Media, WhatsApp Images, WhatsApp Video
+                total_size: 30 * 1024 * 1024,
+                should_succeed: true,
+                ..Default::default()
+            },
+        )
+        .with_tags(vec!["device", "android", "apps", "whatsapp"])
+    }
+
+    /// Scenario: Android with Telegram and Signal (privacy-focused apps)
+    pub fn android_privacy_apps() -> TestScenario {
+        let device = DeviceInfo::new(
+            "\\\\?\\usb#vid_18d1&pid_4ee1#pixel_privacy_test",
+            "Pixel 8 Pro",
+            "Google",
+            "GP4BC",
+        );
+
+        let mut fs = MockFileSystem::new();
+        fs.add_android_dcim_structure(15);
+        fs.add_android_app_folders(
+            0,  // No WhatsApp
+            0,  // No WhatsApp videos
+            12, // Telegram images
+            0,  // No Instagram
+            8,  // Signal images
+        );
+
+        TestScenario::new(
+            "android_privacy_apps",
+            "Android phone with Telegram and Signal (privacy-focused user)",
+            device,
+            fs,
+            ExpectedResults {
+                // Camera: 15 + Telegram: 12 + Signal: 8 = 35
+                files_to_extract: 35,
+                folders: 6,
+                total_size: 35 * 1024 * 1024,
+                should_succeed: true,
+                ..Default::default()
+            },
+        )
+        .with_tags(vec![
+            "device", "android", "apps", "telegram", "signal", "privacy",
+        ])
+    }
+
+    /// Scenario: Mixed iOS and Android devices (testing device type detection)
+    pub fn mixed_ios_android() -> Vec<TestScenario> {
+        vec![
+            {
+                let device = DeviceInfo::new(
+                    "\\\\?\\usb#vid_05ac&pid_12a8#iphone_mixed_test",
+                    "iPhone 15 Pro",
+                    "Apple Inc.",
+                    "iPhone 15 Pro",
+                );
+                let mut fs = MockFileSystem::new();
+                Self::add_standard_dcim_structure(&mut fs, 25, 3);
+
+                TestScenario::new(
+                    "mixed_ios_android_iphone",
+                    "iPhone in mixed iOS/Android setup",
+                    device,
+                    fs,
+                    ExpectedResults {
+                        files_to_extract: 25,
+                        folders: 5,
+                        should_succeed: true,
+                        ..Default::default()
+                    },
+                )
+                .with_tags(vec!["device", "iphone", "mixed", "android"])
+            },
+            {
+                let device = DeviceInfo::new(
+                    "\\\\?\\usb#vid_04e8&pid_6860#galaxy_mixed_test",
+                    "Galaxy S24",
+                    "Samsung",
+                    "SM-S921B",
+                );
+                let mut fs = MockFileSystem::new();
+                fs.add_android_dcim_structure(30);
+
+                TestScenario::new(
+                    "mixed_ios_android_samsung",
+                    "Samsung Galaxy in mixed iOS/Android setup",
+                    device,
+                    fs,
+                    ExpectedResults {
+                        files_to_extract: 30,
+                        folders: 3,
+                        should_succeed: true,
+                        ..Default::default()
+                    },
+                )
+                .with_tags(vec!["device", "android", "samsung", "mixed"])
+            },
+        ]
+    }
+
     /// Scenario: Old iPhone model
     pub fn old_iphone() -> TestScenario {
         let device = DeviceInfo::new(
@@ -1327,13 +1616,18 @@ impl ScenarioLibrary {
     /// Get all available scenarios
     pub fn all_scenarios() -> Vec<TestScenario> {
         let mut scenarios = vec![
-            // Device detection
+            // Device detection - iOS
             Self::no_devices(),
             Self::single_iphone(),
             Self::ipad_device(),
             Self::mixed_devices(),
             Self::old_iphone(),
             Self::unicode_device_name(),
+            // Device detection - Android
+            Self::samsung_galaxy(),
+            Self::google_pixel(),
+            Self::android_full_structure(),
+            Self::oneplus_phone(),
             // File structure
             Self::empty_device(),
             Self::deeply_nested(),
@@ -1365,6 +1659,7 @@ impl ScenarioLibrary {
 
         // Add multiple device scenarios
         scenarios.extend(Self::multiple_iphones());
+        scenarios.extend(Self::mixed_ios_android());
 
         scenarios
     }
@@ -1381,11 +1676,36 @@ impl ScenarioLibrary {
     pub fn quick_scenarios() -> Vec<TestScenario> {
         vec![
             Self::single_iphone(),
+            Self::samsung_galaxy(),
             Self::empty_device(),
             Self::mixed_file_types(),
             Self::device_locked(),
             Self::exact_duplicates(),
             Self::fresh_extraction(),
+        ]
+    }
+
+    /// Get Android-specific test scenarios
+    pub fn android_scenarios() -> Vec<TestScenario> {
+        let mut scenarios = vec![
+            Self::samsung_galaxy(),
+            Self::google_pixel(),
+            Self::android_full_structure(),
+            Self::oneplus_phone(),
+            Self::android_with_app_folders(),
+            Self::android_whatsapp_only(),
+            Self::android_privacy_apps(),
+        ];
+        scenarios.extend(Self::mixed_ios_android());
+        scenarios
+    }
+
+    /// Get Android app-specific scenarios (WhatsApp, Telegram, etc.)
+    pub fn android_app_scenarios() -> Vec<TestScenario> {
+        vec![
+            Self::android_with_app_folders(),
+            Self::android_whatsapp_only(),
+            Self::android_privacy_apps(),
         ]
     }
 }
@@ -1474,5 +1794,181 @@ mod tests {
         assert_eq!(scenario.name, "device_locked");
         assert!(!scenario.expected.should_succeed);
         assert!(scenario.expected.expected_error.is_some());
+    }
+
+    #[test]
+    fn test_samsung_galaxy_scenario() {
+        use crate::device::traits::DeviceType;
+
+        let scenario = ScenarioLibrary::samsung_galaxy();
+
+        assert_eq!(scenario.name, "samsung_galaxy");
+        assert!(scenario.expected.should_succeed);
+        assert!(scenario.expected.files_to_extract > 0);
+        assert!(scenario.file_system.file_count() > 0);
+
+        // Verify device type detection
+        let device_type = scenario.device_info.device_type();
+        assert_eq!(device_type, DeviceType::Android);
+        assert!(device_type.is_android());
+    }
+
+    #[test]
+    fn test_google_pixel_scenario() {
+        use crate::device::traits::DeviceType;
+
+        let scenario = ScenarioLibrary::google_pixel();
+
+        assert_eq!(scenario.name, "google_pixel");
+        assert!(scenario.expected.should_succeed);
+
+        // Verify device type detection
+        assert_eq!(scenario.device_info.device_type(), DeviceType::Android);
+    }
+
+    #[test]
+    fn test_android_full_structure_scenario() {
+        let scenario = ScenarioLibrary::android_full_structure();
+
+        assert_eq!(scenario.name, "android_full_structure");
+        assert!(scenario.expected.should_succeed);
+        // Should have multiple folders (Camera, Screenshots, Pictures, Download, etc.)
+        assert!(scenario.expected.folders >= 5);
+    }
+
+    #[test]
+    fn test_android_scenarios_collection() {
+        let android_scenarios = ScenarioLibrary::android_scenarios();
+
+        assert!(!android_scenarios.is_empty());
+        assert!(android_scenarios.len() >= 4); // At least 4 Android scenarios
+
+        // All should have the android tag
+        for scenario in &android_scenarios {
+            assert!(
+                scenario.tags.contains(&"android".to_string()),
+                "Scenario {} should have 'android' tag",
+                scenario.name
+            );
+        }
+    }
+
+    #[test]
+    fn test_mixed_ios_android_scenarios() {
+        use crate::device::traits::DeviceType;
+
+        let scenarios = ScenarioLibrary::mixed_ios_android();
+
+        assert_eq!(scenarios.len(), 2);
+
+        // First should be iPhone
+        let iphone = &scenarios[0];
+        assert!(iphone.name.contains("iphone"));
+        assert_eq!(iphone.device_info.device_type(), DeviceType::Apple);
+
+        // Second should be Samsung
+        let samsung = &scenarios[1];
+        assert!(samsung.name.contains("samsung"));
+        assert_eq!(samsung.device_info.device_type(), DeviceType::Android);
+    }
+
+    #[test]
+    fn test_device_type_detection_in_scenarios() {
+        use crate::device::traits::DeviceType;
+
+        // Test various scenarios have correct device type
+        assert_eq!(
+            ScenarioLibrary::single_iphone().device_info.device_type(),
+            DeviceType::Apple
+        );
+        assert_eq!(
+            ScenarioLibrary::ipad_device().device_info.device_type(),
+            DeviceType::Apple
+        );
+        assert_eq!(
+            ScenarioLibrary::samsung_galaxy().device_info.device_type(),
+            DeviceType::Android
+        );
+        assert_eq!(
+            ScenarioLibrary::google_pixel().device_info.device_type(),
+            DeviceType::Android
+        );
+        assert_eq!(
+            ScenarioLibrary::oneplus_phone().device_info.device_type(),
+            DeviceType::Android
+        );
+    }
+
+    #[test]
+    fn test_android_with_app_folders_scenario() {
+        let scenario = ScenarioLibrary::android_with_app_folders();
+
+        assert_eq!(scenario.name, "android_with_app_folders");
+        assert!(scenario.expected.should_succeed);
+        // Should have many files from camera + apps
+        assert!(scenario.expected.files_to_extract >= 50);
+        // Should have tags for the apps
+        assert!(scenario.tags.contains(&"whatsapp".to_string()));
+        assert!(scenario.tags.contains(&"telegram".to_string()));
+        assert!(scenario.tags.contains(&"instagram".to_string()));
+        assert!(scenario.tags.contains(&"signal".to_string()));
+    }
+
+    #[test]
+    fn test_android_whatsapp_only_scenario() {
+        let scenario = ScenarioLibrary::android_whatsapp_only();
+
+        assert_eq!(scenario.name, "android_whatsapp_only");
+        assert!(scenario.expected.should_succeed);
+        // Camera: 10 + WhatsApp images: 15 + WhatsApp videos: 5 = 30
+        assert_eq!(scenario.expected.files_to_extract, 30);
+        assert!(scenario.tags.contains(&"whatsapp".to_string()));
+        assert!(!scenario.tags.contains(&"telegram".to_string()));
+    }
+
+    #[test]
+    fn test_android_privacy_apps_scenario() {
+        let scenario = ScenarioLibrary::android_privacy_apps();
+
+        assert_eq!(scenario.name, "android_privacy_apps");
+        assert!(scenario.expected.should_succeed);
+        // Camera: 15 + Telegram: 12 + Signal: 8 = 35
+        assert_eq!(scenario.expected.files_to_extract, 35);
+        assert!(scenario.tags.contains(&"telegram".to_string()));
+        assert!(scenario.tags.contains(&"signal".to_string()));
+        assert!(scenario.tags.contains(&"privacy".to_string()));
+    }
+
+    #[test]
+    fn test_android_app_scenarios_collection() {
+        let app_scenarios = ScenarioLibrary::android_app_scenarios();
+
+        assert_eq!(app_scenarios.len(), 3);
+
+        // All should have android and apps tags
+        for scenario in &app_scenarios {
+            assert!(
+                scenario.tags.contains(&"android".to_string()),
+                "Scenario {} should have 'android' tag",
+                scenario.name
+            );
+            assert!(
+                scenario.tags.contains(&"apps".to_string()),
+                "Scenario {} should have 'apps' tag",
+                scenario.name
+            );
+        }
+    }
+
+    #[test]
+    fn test_android_scenarios_includes_app_scenarios() {
+        let android_scenarios = ScenarioLibrary::android_scenarios();
+
+        // Should include the new app folder scenarios
+        let scenario_names: Vec<&str> = android_scenarios.iter().map(|s| s.name.as_str()).collect();
+
+        assert!(scenario_names.contains(&"android_with_app_folders"));
+        assert!(scenario_names.contains(&"android_whatsapp_only"));
+        assert!(scenario_names.contains(&"android_privacy_apps"));
     }
 }

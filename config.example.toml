@@ -75,8 +75,8 @@ subfolder_by_device = false
 # ┌──────────────────────────────────────────────────────────────────────────────┐
 # │                            📱 DEVICE SETTINGS                                │
 # └──────────────────────────────────────────────────────────────────────────────┘
-# This tool primarily targets iOS devices (iPhone/iPad) but can also work with
-# other MTP-compatible devices when apple_only is set to false.
+# This tool supports iOS devices (iPhone/iPad) and Android devices.
+# Set apple_only to false to enable Android device detection.
 # No iTunes installation or additional drivers are required on Windows 10/11.
 
 [device]
@@ -95,9 +95,96 @@ subfolder_by_device = false
 # device_name_filter = "iPhone"
 
 # Only show Apple devices (iPhone, iPad, iPod touch).
-# Set to `false` to also detect other MTP-compatible devices (Android, cameras, etc.)
-# Note: This tool is optimized for iOS devices; other devices may have limited support.
+# Set to `false` to also detect Android devices and other MTP-compatible devices.
 apple_only = true
+
+
+# ┌──────────────────────────────────────────────────────────────────────────────┐
+# │                         🤖 ANDROID SETTINGS                                  │
+# └──────────────────────────────────────────────────────────────────────────────┘
+# These settings control how photos are extracted from Android devices.
+# Android devices have a different folder structure than iOS devices:
+#   - DCIM/Camera/      - Main camera photos
+#   - DCIM/Screenshots/ - Screenshots (on some devices)
+#   - Pictures/         - Other images, edited photos
+#   - Download/         - Downloaded images
+#
+# To enable Android support, set apple_only = false above.
+
+[android]
+
+# Preserve the folder structure from the Android device.
+# When true: maintains Camera/, Screenshots/, Pictures/ structure
+# When false: extracts all photos to a flat directory
+preserve_structure = true
+
+# Include photos from DCIM/Camera folder (main camera photos)
+# This is where most camera photos are stored on Android devices.
+include_camera = true
+
+# Include screenshots from DCIM/Screenshots or Pictures/Screenshots
+include_screenshots = true
+
+# Include photos from Pictures folder
+# This folder often contains edited photos, app exports, etc.
+include_pictures = true
+
+# Include images from Download folder
+# Set to true if you want to extract downloaded images as well.
+include_downloads = false
+
+# Exclude Android thumbnail/cache folders (.thumbnails, .trash, etc.)
+# This is enabled by default and recommended to keep enabled.
+# These folders contain system-generated cache files, not your actual photos.
+exclude_cache_folders = true
+
+# ── App-Specific Media Folders ──────────────────────────────────────────────
+# Enable extraction from popular messaging and social media apps.
+# When enabled, the tool will automatically scan known folder locations for each app.
+
+# WhatsApp - includes images, videos, and animated GIFs from WhatsApp/Media
+# Folders: WhatsApp/Media/WhatsApp Images, WhatsApp/Media/WhatsApp Video, etc.
+include_whatsapp = false
+
+# Telegram - includes images and videos from Telegram folder
+# Folders: Telegram/Telegram Images, Telegram/Telegram Video
+include_telegram = false
+
+# Instagram - includes saved/cached images
+# Folders: Pictures/Instagram, DCIM/Instagram
+include_instagram = false
+
+# Facebook & Messenger - includes media from Facebook apps
+# Folders: Pictures/Facebook, Pictures/Messenger
+include_facebook = false
+
+# Snapchat - includes saved memories and media
+# Folders: Snapchat, Pictures/Snapchat
+include_snapchat = false
+
+# TikTok - includes saved videos
+# Folders: Pictures/TikTok, DCIM/TikTok
+include_tiktok = false
+
+# Signal - includes media from Signal messenger
+# Folders: Signal/Signal Photos, Signal/Signal Video
+include_signal = false
+
+# Viber - includes media from Viber messenger
+# Folders: Viber/media/Viber Images, Viber/media/Viber Video
+include_viber = false
+
+# ── Custom Folder Configuration ─────────────────────────────────────────────
+# Additional folders to include (relative to Internal Storage)
+# Use this for apps not listed above or custom folder locations.
+# Examples:
+#   additional_folders = ["Twitter/Twitter Images"]
+#   additional_folders = ["Discord/Discord Media", "LINE/LINE Images"]
+additional_folders = []
+
+# Folder names to exclude (will be skipped during extraction)
+# Default excludes common cache/system folders.
+exclude_folders = [".thumbnails", ".trash", ".cache", ".nomedia"]
 
 
 # ┌──────────────────────────────────────────────────────────────────────────────┐

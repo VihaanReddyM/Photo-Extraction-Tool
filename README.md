@@ -1,6 +1,6 @@
 # 📸 Photo Extraction Tool
 
-A fast, reliable command-line tool for extracting photos and videos from iOS devices (iPhone/iPad) on Windows — **no iTunes or additional drivers required**.
+A fast, reliable command-line tool for extracting photos and videos from iOS devices (iPhone/iPad) and Android phones on Windows — **no iTunes or additional drivers required**.
 
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -12,6 +12,8 @@ A fast, reliable command-line tool for extracting photos and videos from iOS dev
 
 - **🚀 Fast & Efficient** — Direct device access via Windows Portable Devices (WPD) API
 - **📱 No iTunes Required** — Works out of the box on Windows 10/11
+- **🤖 Android Support** — Extract from Samsung, Pixel, OnePlus, Xiaomi, and more
+- **💬 App Media Extraction** — WhatsApp, Telegram, Instagram, Signal, and more
 - **🔄 Incremental Backups** — Only extract new photos, skip existing ones
 - **👥 Multi-Device Support** — Automatic organization by device (enabled by default)
 - **🔍 Duplicate Detection** — SHA256 hashing to detect exact duplicates
@@ -28,6 +30,7 @@ A fast, reliable command-line tool for extracting photos and videos from iOS dev
 - [Installation](#-installation)
 - [Usage](#-usage)
 - [Configuration](#-configuration)
+- [Android Support](#-android-support)
 - [Features in Detail](#-features-in-detail)
 - [Troubleshooting](#-troubleshooting)
 - [Building from Source](#-building-from-source)
@@ -38,8 +41,8 @@ A fast, reliable command-line tool for extracting photos and videos from iOS dev
 
 ### First Time Setup
 
-1. **Connect your iOS device** (iPhone/iPad) to your Windows PC via USB
-2. **Unlock your device** and tap **"Trust"** when prompted
+1. **Connect your iOS device** (iPhone/iPad) or **Android phone** to your Windows PC via USB
+2. **Unlock your device** and tap **"Trust"** (iOS) or **"Allow"** (Android) when prompted
 3. **Run the tool**:
 
 ```bash
@@ -274,16 +277,101 @@ This tool automatically detects and handles both structures.
 
 ---
 
+## 🤖 Android Support
+
+The tool fully supports Android devices (Samsung, Google Pixel, OnePlus, Xiaomi, and more).
+
+### Enabling Android Support
+
+To extract from Android devices, set `apple_only = false` in your config:
+
+```bash
+photo_extraction_tool config
+```
+
+Then edit the `[device]` section:
+
+```toml
+[device]
+apple_only = false
+```
+
+### Android Folder Structure
+
+The tool automatically scans common Android photo locations:
+- `DCIM/Camera/` — Main camera photos
+- `DCIM/Screenshots/` — Screenshots
+- `Pictures/` — Edited photos, app exports
+- `Download/` — Downloaded images (optional)
+
+### App-Specific Media Extraction
+
+Extract photos and videos from popular messaging and social media apps:
+
+```toml
+[android]
+# Standard folders
+include_camera = true
+include_screenshots = true
+include_pictures = true
+include_downloads = false
+
+# App-specific media folders
+include_whatsapp = true      # WhatsApp/Media/WhatsApp Images & Video
+include_telegram = true      # Telegram/Telegram Images & Video
+include_instagram = false    # Pictures/Instagram
+include_facebook = false     # Pictures/Facebook & Messenger
+include_snapchat = false     # Snapchat memories
+include_tiktok = false       # TikTok saved videos
+include_signal = false       # Signal/Signal Photos & Video
+include_viber = false        # Viber/media/Viber Images & Video
+```
+
+### Custom Folders
+
+For apps not listed above, use `additional_folders`:
+
+```toml
+[android]
+additional_folders = [
+    "Twitter/Twitter Images",
+    "Discord/Discord Media",
+    "LINE/LINE Images"
+]
+```
+
+### Android Quick Start
+
+```bash
+# 1. Connect your Android phone via USB
+# 2. On the phone: tap "Allow" for USB file transfer
+# 3. Extract photos:
+photo_extraction_tool
+
+# List connected devices (shows device type)
+photo_extraction_tool list
+# Output: Galaxy S24 Ultra (SM-S928B) [Android]
+```
+
+---
+
 ## ❓ Troubleshooting
 
 ### Device Not Detected
 
+**For iOS devices:**
 1. **Unlock Your Device**: iOS devices must be unlocked for access
 2. **Trust the Computer**: Tap "Trust" when prompted on your iPhone/iPad
 3. **Check USB Connection**: Try a different cable or port
 4. **Restart Device**: Sometimes a restart resolves connection issues
 
-> **Note**: No iTunes or additional drivers required. Windows 10/11 includes built-in support for iOS devices.
+**For Android devices:**
+1. **Unlock Your Device**: Android must be unlocked for USB access
+2. **Allow File Transfer**: When prompted, select "File Transfer" or "MTP" mode
+3. **Check USB Settings**: Pull down notification shade and tap USB notification to change mode
+4. **Enable USB Debugging**: Some devices may require this in Developer Options
+
+> **Note**: No iTunes or additional drivers required. Windows 10/11 includes built-in support for iOS and Android devices via MTP.
 
 ### "No photos found"
 
@@ -300,9 +388,10 @@ This tool automatically detects and handles both structures.
 
 | Error | Solution |
 |-------|----------|
-| "No devices found" | Connect device, unlock it, tap "Trust" |
-| "Access denied" | Unlock iOS device or run as Administrator |
+| "No devices found" | Connect device, unlock it, tap "Trust" (iOS) or "Allow" (Android) |
+| "Access denied" | Unlock device or run as Administrator |
 | "Setup required" | Run the tool normally to start setup wizard |
+| "No photos found" (Android) | Check USB mode is set to "File Transfer" not "Charging" |
 
 ---
 

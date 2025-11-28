@@ -1,13 +1,16 @@
 //! Photo extraction module
 //!
-//! Handles the actual extraction of photos from connected iOS devices.
+//! Handles the actual extraction of photos from connected iOS and Android devices.
 //! This module manages the full extraction workflow including:
 //! - Device connection and content enumeration
 //! - Progress tracking with visual feedback
 //! - Duplicate detection integration
 //! - State tracking for resume support
+//! - Android-specific folder structure handling
 
-use crate::core::config::{DuplicateAction, DuplicateDetectionConfig, TrackingConfig};
+use crate::core::config::{
+    app_folders, AndroidConfig, DuplicateAction, DuplicateDetectionConfig, TrackingConfig,
+};
 use crate::core::error::{ExtractionError, Result};
 use crate::core::tracking::StateTracker;
 use crate::device::traits::{DeviceContentTrait, DeviceInfo, DeviceManagerTrait, DeviceObject};
@@ -42,6 +45,8 @@ pub struct ExtractionConfig {
     pub tracking: Option<TrackingConfig>,
     /// Quiet mode - suppresses console output (for parallel extraction)
     pub quiet: bool,
+    /// Android-specific configuration (None = use defaults)
+    pub android_config: Option<AndroidConfig>,
 }
 
 impl Default for ExtractionConfig {
@@ -54,6 +59,7 @@ impl Default for ExtractionConfig {
             duplicate_detection: None,
             tracking: None,
             quiet: false,
+            android_config: None,
         }
     }
 }
@@ -281,7 +287,12 @@ pub fn extract_photos_with_progress(
     }
 
     // Find all photos - progress is shown by ScanProgress (only in non-quiet mode)
-    let all_photos = find_all_photos_with_progress(&content, config.dcim_only, quiet)?;
+    let all_photos = find_all_photos_with_progress(
+        &content,
+        config.dcim_only,
+        quiet,
+        config.android_config.as_ref(),
+    )?;
     let total_on_device = all_photos.len();
 
     if total_on_device == 0 {
@@ -537,6 +548,7 @@ fn find_all_photos_with_progress(
     content: &DeviceContent,
     dcim_only: bool,
     quiet: bool,
+    android_config: Option<&AndroidConfig>,
 ) -> Result<Vec<PhotoInfo>> {
     let mut photos = Vec::new();
     let progress = if quiet {
@@ -560,10 +572,20 @@ fn find_all_photos_with_progress(
     if root_objects.is_empty() {
         warn!("No root objects found on device!");
         warn!("This usually means:");
-        warn!("  1. The iOS device is locked — please unlock it");
-        warn!("  2. You haven't tapped 'Trust' on the device");
+        warn!("  1. The device is locked — please unlock it");
+        warn!("  2. You haven't tapped 'Trust' or 'Allow' on the device");
         warn!("  3. Try a different USB cable or port");
         return Ok(photos);
+    }
+
+    // If Android config is provided, use Android-specific scanning
+    if let Some(android_cfg) = android_config {
+        debug!("Using Android-specific folder scanning");
+        let android_photos = scan_android_device(content, android_cfg, &progress)?;
+        if let Some(ref p) = progress {
+            p.finish();
+        }
+        return Ok(android_photos);
     }
 
     // Look for storage or DCIM folder
@@ -739,6 +761,383 @@ fn is_ios_photo_folder(name: &str) -> bool {
     }
 
     false
+}
+
+/// Check if a folder should be included for Android extraction based on config
+fn is_android_included_folder(folder_name: &str, config: &AndroidConfig) -> bool {
+    let name_lower = folder_name.to_lowercase();
+
+    // Check if it's the Camera folder
+    if name_lower == "camera" && config.include_camera {
+        return true;
+    }
+
+    // Check if it's Screenshots folder
+    if name_lower == "screenshots" && config.include_screenshots {
+        return true;
+    }
+
+    // Check if it's Pictures folder
+    if name_lower == "pictures" && config.include_pictures {
+        return true;
+    }
+
+    // Check if it's Download folder
+    if name_lower == "download" && config.include_downloads {
+        return true;
+    }
+
+    // Check additional folders configured by user
+    for additional in &config.additional_folders {
+        // Match the first component of additional folder path
+        let first_component = additional.split('/').next().unwrap_or("");
+        if name_lower == first_component.to_lowercase() {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Check if a folder should be excluded (Android cache/system folders)
+fn is_android_excluded_folder(folder_name: &str, config: &AndroidConfig) -> bool {
+    if !config.exclude_cache_folders {
+        return false;
+    }
+
+    let name_lower = folder_name.to_lowercase();
+
+    // Check against configured exclude list
+    for excluded in &config.exclude_folders {
+        if name_lower == excluded.to_lowercase() {
+            return true;
+        }
+    }
+
+    // Also exclude common hidden/system folders
+    if name_lower.starts_with('.') {
+        return true;
+    }
+
+    false
+}
+
+/// Scan Android device for photos based on config
+fn scan_android_device(
+    content: &DeviceContent,
+    config: &AndroidConfig,
+    progress: &Option<ScanProgress>,
+) -> Result<Vec<PhotoInfo>> {
+    let mut photos = Vec::new();
+
+    let root_objects = content.enumerate_objects()?;
+    debug!(
+        "Scanning Android device, found {} root objects",
+        root_objects.len()
+    );
+
+    // Find Internal Storage or similar root
+    for root in root_objects {
+        if !root.is_folder {
+            continue;
+        }
+
+        let root_name_upper = root.name.to_uppercase();
+        let is_storage = root_name_upper.contains("STORAGE")
+            || root_name_upper.contains("INTERNAL")
+            || root_name_upper == "SDCARD"
+            || root_name_upper == "PHONE";
+
+        if !is_storage {
+            continue;
+        }
+
+        debug!("Found storage root: '{}'", root.name);
+
+        // Enumerate storage contents
+        let storage_children = match content.enumerate_children(&root.object_id) {
+            Ok(children) => children,
+            Err(e) => {
+                warn!("Failed to enumerate storage '{}': {}", root.name, e);
+                continue;
+            }
+        };
+
+        for child in storage_children {
+            if !child.is_folder {
+                continue;
+            }
+
+            let child_name_upper = child.name.to_uppercase();
+
+            // Handle DCIM folder (contains Camera, Screenshots on some devices)
+            if child_name_upper == "DCIM" {
+                debug!("Found DCIM folder, scanning for Camera/Screenshots...");
+                scan_android_dcim(content, &child, config, &mut photos, progress)?;
+            }
+            // Handle Pictures folder
+            else if child_name_upper == "PICTURES" && config.include_pictures {
+                debug!("Found Pictures folder, scanning...");
+                let path = format!("{}/Pictures", root.name);
+                scan_android_folder_recursive(
+                    content,
+                    &child,
+                    &path,
+                    config,
+                    &mut photos,
+                    progress,
+                )?;
+            }
+            // Handle Download folder
+            else if child_name_upper == "DOWNLOAD" && config.include_downloads {
+                debug!("Found Download folder, scanning...");
+                let path = format!("{}/Download", root.name);
+                scan_android_folder_recursive(
+                    content,
+                    &child,
+                    &path,
+                    config,
+                    &mut photos,
+                    progress,
+                )?;
+            }
+            // Handle additional user-configured folders
+            else if is_android_included_folder(&child.name, config) {
+                debug!("Found configured folder '{}', scanning...", child.name);
+                let path = format!("{}/{}", root.name, child.name);
+                scan_android_folder_recursive(
+                    content,
+                    &child,
+                    &path,
+                    config,
+                    &mut photos,
+                    progress,
+                )?;
+            }
+        }
+
+        // Scan app-specific folders if enabled
+        if config.has_app_folders_enabled() {
+            debug!("Scanning app-specific folders...");
+            scan_android_app_folders(content, &root, config, &mut photos, progress)?;
+        }
+    }
+
+    Ok(photos)
+}
+
+/// Scan app-specific media folders (WhatsApp, Telegram, etc.)
+fn scan_android_app_folders(
+    content: &DeviceContent,
+    storage_root: &DeviceObject,
+    config: &AndroidConfig,
+    photos: &mut Vec<PhotoInfo>,
+    progress: &Option<ScanProgress>,
+) -> Result<()> {
+    let enabled_folders = config.get_enabled_app_folders();
+
+    if enabled_folders.is_empty() {
+        return Ok(());
+    }
+
+    debug!(
+        "Scanning {} app-specific folder paths",
+        enabled_folders.len()
+    );
+
+    for folder_path in enabled_folders {
+        debug!("Looking for app folder: {}", folder_path);
+
+        // Try to navigate to the folder path
+        if let Some(folder) = find_folder_by_path(content, storage_root, folder_path) {
+            debug!("Found app folder: {}", folder_path);
+            let full_path = format!("{}/{}", storage_root.name, folder_path);
+            scan_android_folder_recursive(content, &folder, &full_path, config, photos, progress)?;
+        } else {
+            trace!("App folder not found: {}", folder_path);
+        }
+    }
+
+    // Also scan user-configured additional_folders
+    for folder_path in &config.additional_folders {
+        debug!("Looking for custom folder: {}", folder_path);
+
+        if let Some(folder) = find_folder_by_path(content, storage_root, folder_path) {
+            debug!("Found custom folder: {}", folder_path);
+            let full_path = format!("{}/{}", storage_root.name, folder_path);
+            scan_android_folder_recursive(content, &folder, &full_path, config, photos, progress)?;
+        } else {
+            trace!("Custom folder not found: {}", folder_path);
+        }
+    }
+
+    Ok(())
+}
+
+/// Find a folder by navigating a path like "WhatsApp/Media/WhatsApp Images"
+fn find_folder_by_path(
+    content: &DeviceContent,
+    storage_root: &DeviceObject,
+    path: &str,
+) -> Option<DeviceObject> {
+    let path_parts: Vec<&str> = path.split('/').collect();
+
+    if path_parts.is_empty() {
+        return None;
+    }
+
+    // Start from storage root
+    let mut current_parent_id = storage_root.object_id.clone();
+    let mut current_folder: Option<DeviceObject> = None;
+
+    for (i, part) in path_parts.iter().enumerate() {
+        let children = match content.enumerate_children(&current_parent_id) {
+            Ok(c) => c,
+            Err(_) => return None,
+        };
+
+        let part_upper = part.to_uppercase();
+        let mut found = false;
+
+        for child in children {
+            if child.is_folder && child.name.to_uppercase() == part_upper {
+                current_parent_id = child.object_id.clone();
+                current_folder = Some(child);
+                found = true;
+                break;
+            }
+        }
+
+        if !found {
+            trace!(
+                "Path component '{}' not found at level {} in path '{}'",
+                part,
+                i,
+                path
+            );
+            return None;
+        }
+    }
+
+    current_folder
+}
+
+/// Scan Android DCIM folder for Camera and Screenshots
+fn scan_android_dcim(
+    content: &DeviceContent,
+    dcim: &DeviceObject,
+    config: &AndroidConfig,
+    photos: &mut Vec<PhotoInfo>,
+    progress: &Option<ScanProgress>,
+) -> Result<()> {
+    if let Some(ref p) = progress {
+        p.increment_folders();
+    }
+
+    let children = match content.enumerate_children(&dcim.object_id) {
+        Ok(c) => c,
+        Err(e) => {
+            warn!("Failed to enumerate DCIM: {}", e);
+            return Ok(());
+        }
+    };
+
+    for child in children {
+        if !child.is_folder {
+            // File directly in DCIM - check if it's media
+            if is_media_file(&child.name) {
+                photos.push(PhotoInfo {
+                    object_id: child.object_id.clone(),
+                    name: child.name.clone(),
+                    path: format!("DCIM/{}", child.name),
+                    size: child.size,
+                    date_modified: child.date_modified.clone(),
+                });
+                if let Some(ref p) = progress {
+                    p.add_files(1);
+                }
+            }
+            continue;
+        }
+
+        let child_name_upper = child.name.to_uppercase();
+
+        // Skip excluded folders
+        if is_android_excluded_folder(&child.name, config) {
+            debug!("Skipping excluded folder: {}", child.name);
+            continue;
+        }
+
+        // Camera folder
+        if child_name_upper == "CAMERA" && config.include_camera {
+            debug!("Scanning DCIM/Camera...");
+            let path = "DCIM/Camera".to_string();
+            scan_android_folder_recursive(content, &child, &path, config, photos, progress)?;
+        }
+        // Screenshots folder (some devices have it under DCIM)
+        else if child_name_upper == "SCREENSHOTS" && config.include_screenshots {
+            debug!("Scanning DCIM/Screenshots...");
+            let path = "DCIM/Screenshots".to_string();
+            scan_android_folder_recursive(content, &child, &path, config, photos, progress)?;
+        }
+        // Other folders in DCIM (like 100ANDRO, manufacturer-specific folders)
+        else if config.include_camera {
+            // Include other DCIM subfolders as they often contain camera photos too
+            debug!("Scanning DCIM/{}...", child.name);
+            let path = format!("DCIM/{}", child.name);
+            scan_android_folder_recursive(content, &child, &path, config, photos, progress)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Recursively scan an Android folder for photos
+fn scan_android_folder_recursive(
+    content: &DeviceContent,
+    folder: &DeviceObject,
+    path: &str,
+    config: &AndroidConfig,
+    photos: &mut Vec<PhotoInfo>,
+    progress: &Option<ScanProgress>,
+) -> Result<()> {
+    if let Some(ref p) = progress {
+        p.increment_folders();
+    }
+
+    let children = match content.enumerate_children(&folder.object_id) {
+        Ok(c) => c,
+        Err(e) => {
+            warn!("Failed to enumerate '{}': {}", path, e);
+            return Ok(());
+        }
+    };
+
+    for child in children {
+        if child.is_folder {
+            // Skip excluded folders
+            if is_android_excluded_folder(&child.name, config) {
+                debug!("Skipping excluded folder: {}/{}", path, child.name);
+                continue;
+            }
+
+            let child_path = format!("{}/{}", path, child.name);
+            scan_android_folder_recursive(content, &child, &child_path, config, photos, progress)?;
+        } else if is_media_file(&child.name) {
+            photos.push(PhotoInfo {
+                object_id: child.object_id.clone(),
+                name: child.name.clone(),
+                path: format!("{}/{}", path, child.name),
+                size: child.size,
+                date_modified: child.date_modified.clone(),
+            });
+            if let Some(ref p) = progress {
+                p.add_files(1);
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// Recursively scan a folder for photos

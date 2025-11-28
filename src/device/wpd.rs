@@ -1,15 +1,16 @@
 //! Device module for Windows Portable Devices (WPD) enumeration and management
 //!
-//! This module handles discovering connected iOS devices (iPhone/iPad) and managing
-//! connections to them through the Windows Portable Devices API.
+//! This module handles discovering connected MTP devices (iOS, Android, cameras)
+//! and managing connections to them through the Windows Portable Devices API.
 //! No iTunes installation or additional drivers are required on Windows 10/11.
 //!
 //! It implements the device traits from `traits.rs` to enable testability
-//! by allowing mock devices to be substituted for real iOS devices.
+//! by allowing mock devices to be substituted for real devices.
 
 use crate::core::error::{ExtractionError, Result};
 use crate::device::traits::{
     DeviceContentTrait, DeviceInfo, DeviceManagerTrait, DeviceObject, DeviceSimulationConfig,
+    DeviceType,
 };
 use log::{debug, info, trace, warn};
 use std::collections::HashMap;
@@ -258,21 +259,11 @@ impl DeviceManagerTrait for DeviceManager {
     type Content = DeviceContent;
 
     fn enumerate_apple_devices(&self) -> Result<Vec<DeviceInfo>> {
-        let all_devices = self.enumerate_all_devices()?;
+        self.enumerate_devices_by_type(DeviceType::Apple)
+    }
 
-        let apple_devices: Vec<DeviceInfo> = all_devices
-            .into_iter()
-            .filter(|d| {
-                d.manufacturer.to_lowercase().contains("apple")
-                    || d.model.to_lowercase().contains("iphone")
-                    || d.model.to_lowercase().contains("ipad")
-                    || d.friendly_name.to_lowercase().contains("iphone")
-                    || d.friendly_name.to_lowercase().contains("ipad")
-                    || d.friendly_name.to_lowercase().contains("apple")
-            })
-            .collect();
-
-        Ok(apple_devices)
+    fn enumerate_android_devices(&self) -> Result<Vec<DeviceInfo>> {
+        self.enumerate_devices_by_type(DeviceType::Android)
     }
 
     fn enumerate_all_devices(&self) -> Result<Vec<DeviceInfo>> {
@@ -920,9 +911,31 @@ pub fn initialize_com() -> Result<ComGuard> {
 /// This is a convenience wrapper that creates a DeviceManager
 /// and enumerates Apple devices in one call.
 #[allow(dead_code)]
+/// Enumerate all connected Apple devices (convenience function)
+///
+/// This is a helper function that creates a DeviceManager and enumerates Apple devices.
+/// For more control, create a DeviceManager directly.
 pub fn enumerate_devices() -> Result<Vec<DeviceInfo>> {
     let manager = DeviceManager::new()?;
     manager.enumerate_apple_devices()
+}
+
+/// Enumerate all connected Android devices (convenience function)
+///
+/// This is a helper function that creates a DeviceManager and enumerates Android devices.
+/// For more control, create a DeviceManager directly.
+pub fn enumerate_android_devices() -> Result<Vec<DeviceInfo>> {
+    let manager = DeviceManager::new()?;
+    manager.enumerate_android_devices()
+}
+
+/// Enumerate all connected MTP devices (convenience function)
+///
+/// This is a helper function that creates a DeviceManager and enumerates all devices.
+/// For more control, create a DeviceManager directly.
+pub fn enumerate_all_mtp_devices() -> Result<Vec<DeviceInfo>> {
+    let manager = DeviceManager::new()?;
+    manager.enumerate_all_devices()
 }
 
 // =============================================================================

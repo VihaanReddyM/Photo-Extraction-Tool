@@ -476,6 +476,33 @@ enabled = {}
 tracking_filename = "{}"
 track_extracted_files = {}
 
+# ┌──────────────────────────────────────────────────────────────────────────────┐
+# │                         🤖 ANDROID SETTINGS                                  │
+# └──────────────────────────────────────────────────────────────────────────────┘
+# These settings control how photos are extracted from Android devices.
+# To enable Android support, set apple_only = false in [device] section.
+
+[android]
+preserve_structure = {}
+include_camera = {}
+include_screenshots = {}
+include_pictures = {}
+include_downloads = {}
+exclude_cache_folders = {}
+
+# App-specific media folders (set to true to include)
+include_whatsapp = {}
+include_telegram = {}
+include_instagram = {}
+include_facebook = {}
+include_snapchat = {}
+include_tiktok = {}
+include_signal = {}
+include_viber = {}
+
+additional_folders = []
+exclude_folders = [".thumbnails", ".trash", ".cache", ".nomedia"]
+
 # ╔══════════════════════════════════════════════════════════════════════════════╗
 # ║  To edit this file: photo_extraction_tool config                             ║
 # ║  To reset to defaults: photo_extraction_tool config --reset                  ║
@@ -521,6 +548,22 @@ track_extracted_files = {}
         config.tracking.enabled,
         config.tracking.tracking_filename,
         config.tracking.track_extracted_files,
+        // android
+        config.android.preserve_structure,
+        config.android.include_camera,
+        config.android.include_screenshots,
+        config.android.include_pictures,
+        config.android.include_downloads,
+        config.android.exclude_cache_folders,
+        // android app folders
+        config.android.include_whatsapp,
+        config.android.include_telegram,
+        config.android.include_instagram,
+        config.android.include_facebook,
+        config.android.include_snapchat,
+        config.android.include_tiktok,
+        config.android.include_signal,
+        config.android.include_viber,
     )
 }
 

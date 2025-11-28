@@ -97,7 +97,12 @@ impl SharedProgress {
 /// run the setup wizard first before proceeding with extraction commands.
 pub fn run_command(args: &Args, config: &Config, shutdown_flag: Arc<AtomicBool>) -> Result<()> {
     // Check if setup is needed for extraction commands
-    let config = check_and_run_setup_if_needed(args, config)?;
+    let mut config = check_and_run_setup_if_needed(args, config)?;
+
+    // If --all-devices is passed, override apple_only setting
+    if args.all_devices {
+        config.device.apple_only = false;
+    }
 
     match &args.command {
         Some(Commands::Config { path, reset }) => {
@@ -129,7 +134,14 @@ pub fn run_command(args: &Args, config: &Config, shutdown_flag: Arc<AtomicBool>)
                 .clone()
                 .or_else(|| args.duplicate_action.clone());
 
-            extract_photos_with_args(&config, shutdown_flag, use_detect, folders, action)?;
+            extract_photos_with_args(
+                &config,
+                shutdown_flag,
+                use_detect,
+                folders,
+                action,
+                args.all_devices,
+            )?;
         }
         None => {
             // Use global args when no subcommand specified
@@ -139,6 +151,7 @@ pub fn run_command(args: &Args, config: &Config, shutdown_flag: Arc<AtomicBool>)
                 args.detect_duplicates,
                 args.compare_folders.clone(),
                 args.duplicate_action.clone(),
+                args.all_devices,
             )?;
         }
         Some(Commands::ListProfiles) => {
@@ -572,6 +585,39 @@ pub fn show_config(config: &Config) {
         "  track_extracted_files = {}",
         config.tracking.track_extracted_files
     );
+    info!("");
+    info!("[android]");
+    info!(
+        "  preserve_structure = {}",
+        config.android.preserve_structure
+    );
+    info!("  include_camera = {}", config.android.include_camera);
+    info!(
+        "  include_screenshots = {}",
+        config.android.include_screenshots
+    );
+    info!("  include_pictures = {}", config.android.include_pictures);
+    info!("  include_downloads = {}", config.android.include_downloads);
+    info!(
+        "  exclude_cache_folders = {}",
+        config.android.exclude_cache_folders
+    );
+    info!("");
+    info!("  # App-specific folders");
+    info!("  include_whatsapp = {}", config.android.include_whatsapp);
+    info!("  include_telegram = {}", config.android.include_telegram);
+    info!("  include_instagram = {}", config.android.include_instagram);
+    info!("  include_facebook = {}", config.android.include_facebook);
+    info!("  include_snapchat = {}", config.android.include_snapchat);
+    info!("  include_tiktok = {}", config.android.include_tiktok);
+    info!("  include_signal = {}", config.android.include_signal);
+    info!("  include_viber = {}", config.android.include_viber);
+    info!("");
+    info!(
+        "  additional_folders = {:?}",
+        config.android.additional_folders
+    );
+    info!("  exclude_folders = {:?}", config.android.exclude_folders);
 }
 
 /// List connected devices
@@ -607,7 +653,9 @@ pub fn list_devices(all_devices: bool) -> Result<()> {
     info!("Found {} device(s):", devices.len());
     info!("");
     for (i, device) in devices.iter().enumerate() {
-        info!("[{}] {}", i + 1, device.friendly_name);
+        let device_type = device.device_type();
+        info!("[{}] {} ({})", i + 1, device.friendly_name, device_type);
+        info!("    Type: {}", device_type.display_name());
         info!("    Manufacturer: {}", device.manufacturer);
         info!("    Model: {}", device.model);
         info!("    Device ID: {}", device.device_id);
@@ -750,6 +798,7 @@ pub fn extract_photos_with_args(
     detect_duplicates: bool,
     compare_folders: Vec<PathBuf>,
     duplicate_action: Option<String>,
+    all_devices: bool,
 ) -> Result<()> {
     // Initialize COM library (required for WPD)
     let _com_guard = device::initialize_com()?;
@@ -759,7 +808,10 @@ pub fn extract_photos_with_args(
 
     debug!("Scanning for connected devices...");
 
-    let devices = if config.device.apple_only {
+    // --all-devices flag overrides apple_only config
+    let use_apple_only = config.device.apple_only && !all_devices;
+
+    let devices = if use_apple_only {
         manager.enumerate_apple_devices()?
     } else {
         manager.enumerate_all_devices()?
@@ -769,13 +821,23 @@ pub fn extract_photos_with_args(
         println!();
         println!("  ✗ No portable devices found.");
         println!();
-        println!("  Make sure your iPhone is:");
-        println!("    1. Connected via USB cable");
-        println!("    2. Unlocked");
-        println!("    3. Trusting this computer (tap 'Trust' when prompted)");
-        println!();
-        println!("  Use 'list' command to see available devices");
-        println!("  Use '--all-devices' to see all portable devices (not just Apple)");
+        if use_apple_only {
+            println!("  Make sure your iPhone is:");
+            println!("    1. Connected via USB cable");
+            println!("    2. Unlocked");
+            println!("    3. Trusting this computer (tap 'Trust' when prompted)");
+            println!();
+            println!("  Use 'list' command to see available devices");
+            println!("  Use '--all-devices' to see all portable devices (not just Apple)");
+        } else {
+            println!("  Make sure your device is:");
+            println!("    1. Connected via USB cable");
+            println!("    2. Unlocked");
+            println!("    3. iOS: Tap 'Trust' when prompted");
+            println!("    4. Android: Select 'File Transfer' / 'MTP' mode");
+            println!();
+            println!("  Use 'list' command to see available devices");
+        }
         return Ok(());
     }
 
@@ -885,6 +947,14 @@ fn extract_from_single_device_impl(
         debug!("Created output directory: {}", output_dir.display());
     }
 
+    // Check if this is an Android device and use Android-specific config
+    let android_config = if device.device_type().is_android() {
+        debug!("Detected Android device, using Android extraction config");
+        Some(config.android.clone())
+    } else {
+        None
+    };
+
     let extraction_config = extractor::ExtractionConfig {
         output_dir: output_dir.clone(),
         dcim_only: config.extraction.dcim_only,
@@ -897,6 +967,7 @@ fn extract_from_single_device_impl(
             None
         },
         quiet,
+        android_config,
     };
 
     let stats = extractor::extract_photos(device, extraction_config, shutdown_flag)?;
@@ -928,6 +999,14 @@ fn extract_with_output_dir(
         debug!("Created output directory: {}", output_dir.display());
     }
 
+    // Check if this is an Android device and use Android-specific config
+    let android_config = if device.device_type().is_android() {
+        debug!("Detected Android device, using Android extraction config");
+        Some(config.android.clone())
+    } else {
+        None
+    };
+
     let extraction_config = extractor::ExtractionConfig {
         output_dir: output_dir.clone(),
         dcim_only: config.extraction.dcim_only,
@@ -940,6 +1019,7 @@ fn extract_with_output_dir(
             None
         },
         quiet: true, // Always quiet for parallel
+        android_config,
     };
 
     // Create progress callback if we have shared progress

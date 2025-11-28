@@ -1,7 +1,7 @@
 //! Photo Extraction Tool Library
 //!
-//! A fast, reliable library for extracting photos and videos from iOS devices
-//! (iPhone/iPad) on Windows using the Windows Portable Devices (WPD) API.
+//! A fast, reliable library for extracting photos and videos from iOS and Android
+//! devices on Windows using the Windows Portable Devices (WPD) API.
 //! No iTunes installation or additional drivers are required on Windows 10/11.
 //!
 //! # Architecture
@@ -34,7 +34,7 @@
 //!
 //!     // Create device manager and find devices
 //!     let manager = DeviceManager::new()?;
-//!     let devices = manager.enumerate_apple_devices()?;
+//!     let devices = manager.enumerate_apple_devices()?;  // Or enumerate_android_devices()
 //!
 //!     if let Some(device) = devices.first() {
 //!         // Set up shutdown flag for graceful termination
@@ -100,6 +100,7 @@
 //! # Features
 //!
 //! - **No iTunes or Drivers Required** - Works out of the box on Windows 10/11
+//! - **iOS and Android Support** - Extract from iPhones, iPads, and Android devices
 //! - **Incremental Backups** - Track extracted files to avoid re-downloading
 //! - **Duplicate Detection** - SHA256-based exact duplicate detection
 //! - **Multi-Device Support** - Manage multiple devices with profiles
@@ -113,7 +114,8 @@
 //!
 //! This library only supports Windows due to its reliance on the Windows
 //! Portable Devices (WPD) API. No iTunes installation or additional drivers
-//! are required — Windows 10/11 includes built-in USB/MTP support for iOS devices.
+//! are required — Windows 10/11 includes built-in USB/MTP support for iOS and
+//! Android devices.
 
 // Core modules - always available
 pub mod cli;

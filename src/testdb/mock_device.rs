@@ -45,6 +45,7 @@
 use crate::core::error::{ExtractionError, Result};
 use crate::device::traits::{
     DeviceContentTrait, DeviceInfo, DeviceManagerTrait, DeviceObject, DeviceSimulationConfig,
+    DeviceType,
 };
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -597,6 +598,287 @@ impl MockFileSystem {
         }
     }
 
+    /// Add a standard Android DCIM folder structure
+    ///
+    /// Creates: Internal Storage/DCIM/Camera/ with photos
+    /// Android devices typically use DCIM/Camera instead of numbered APPLE folders.
+    /// Uses memory-efficient small content sizes to prevent memory exhaustion.
+    pub fn add_android_dcim_structure(&mut self, num_files: usize) {
+        use crate::testdb::generator::{MockDataGenerator, TEST_JPEG_SIZE};
+
+        // Add Internal Storage (some Android devices call it "Internal shared storage")
+        self.add_object(MockObject::folder("internal", "DEVICE", "Internal Storage"));
+
+        // Add DCIM folder
+        self.add_object(MockObject::folder("dcim", "internal", "DCIM"));
+
+        // Add Camera folder (standard Android camera folder)
+        self.add_object(MockObject::folder("camera", "dcim", "Camera"));
+
+        // Add photos with Android-style naming (IMG_YYYYMMDD_HHMMSS.jpg)
+        for i in 0..num_files {
+            let file_id = format!("img_{:06}", i + 1);
+            // Android typically uses IMG_YYYYMMDD_HHMMSS format
+            let file_name = format!("IMG_20240115_{:06}.jpg", 120000 + i);
+
+            let content =
+                MockDataGenerator::generate_jpeg_with_seed(TEST_JPEG_SIZE, (i + 1) as u64);
+
+            self.add_object(MockObject::file(&file_id, "camera", &file_name, content));
+        }
+    }
+
+    /// Add a full Android folder structure with multiple media folders
+    ///
+    /// Creates:
+    /// - Internal Storage/DCIM/Camera/ (main camera photos)
+    /// - Internal Storage/DCIM/Screenshots/ (screenshots)
+    /// - Internal Storage/Pictures/ (other images)
+    /// - Internal Storage/Download/ (downloaded images)
+    ///
+    /// This simulates a more complete Android device structure.
+    pub fn add_full_android_structure(
+        &mut self,
+        camera_files: usize,
+        screenshot_files: usize,
+        pictures_files: usize,
+        download_files: usize,
+    ) {
+        use crate::testdb::generator::{MockDataGenerator, TEST_JPEG_SIZE};
+
+        // Add Internal Storage
+        self.add_object(MockObject::folder("internal", "DEVICE", "Internal Storage"));
+
+        // Add DCIM folder
+        self.add_object(MockObject::folder("dcim", "internal", "DCIM"));
+
+        // Add Camera folder
+        self.add_object(MockObject::folder("camera", "dcim", "Camera"));
+
+        // Add Screenshots folder (under DCIM on many Android devices)
+        self.add_object(MockObject::folder("screenshots", "dcim", "Screenshots"));
+
+        // Add Pictures folder (at root level)
+        self.add_object(MockObject::folder("pictures", "internal", "Pictures"));
+
+        // Add Download folder
+        self.add_object(MockObject::folder("download", "internal", "Download"));
+
+        // Add .thumbnails folder (should be skipped during extraction)
+        self.add_object(MockObject::folder("thumbnails", "dcim", ".thumbnails"));
+
+        let mut file_counter = 1;
+
+        // Camera photos
+        for i in 0..camera_files {
+            let file_id = format!("cam_{:06}", file_counter);
+            let file_name = format!("IMG_20240115_{:06}.jpg", 120000 + i);
+            let content =
+                MockDataGenerator::generate_jpeg_with_seed(TEST_JPEG_SIZE, file_counter as u64);
+            self.add_object(MockObject::file(&file_id, "camera", &file_name, content));
+            file_counter += 1;
+        }
+
+        // Screenshots
+        for i in 0..screenshot_files {
+            let file_id = format!("ss_{:06}", file_counter);
+            let file_name = format!("Screenshot_20240115_{:06}.png", 130000 + i);
+            let content =
+                MockDataGenerator::generate_png_with_seed(TEST_JPEG_SIZE, file_counter as u64);
+            self.add_object(MockObject::file(
+                &file_id,
+                "screenshots",
+                &file_name,
+                content,
+            ));
+            file_counter += 1;
+        }
+
+        // Pictures folder files
+        for i in 0..pictures_files {
+            let file_id = format!("pic_{:06}", file_counter);
+            let file_name = format!("image_{:04}.jpg", i + 1);
+            let content =
+                MockDataGenerator::generate_jpeg_with_seed(TEST_JPEG_SIZE, file_counter as u64);
+            self.add_object(MockObject::file(&file_id, "pictures", &file_name, content));
+            file_counter += 1;
+        }
+
+        // Download folder files
+        for i in 0..download_files {
+            let file_id = format!("dl_{:06}", file_counter);
+            let file_name = format!("downloaded_{:04}.jpg", i + 1);
+            let content =
+                MockDataGenerator::generate_jpeg_with_seed(TEST_JPEG_SIZE, file_counter as u64);
+            self.add_object(MockObject::file(&file_id, "download", &file_name, content));
+            file_counter += 1;
+        }
+
+        // Add a thumbnail file (should be skipped)
+        let thumb_content = MockDataGenerator::generate_jpeg_with_seed(TEST_JPEG_SIZE, 9999);
+        self.add_object(MockObject::file(
+            "thumb_001",
+            "thumbnails",
+            ".thumbdata4--1967290299",
+            thumb_content,
+        ));
+    }
+
+    /// Add app-specific media folder structures for Android
+    ///
+    /// Creates folders for popular messaging and social media apps:
+    /// - WhatsApp/Media/WhatsApp Images
+    /// - WhatsApp/Media/WhatsApp Video
+    /// - Telegram/Telegram Images
+    /// - Telegram/Telegram Video
+    /// - Pictures/Instagram
+    /// - Signal/Signal Photos
+    ///
+    /// Requires Internal Storage to already exist (call add_android_dcim_structure first)
+    pub fn add_android_app_folders(
+        &mut self,
+        whatsapp_images: usize,
+        whatsapp_videos: usize,
+        telegram_images: usize,
+        instagram_images: usize,
+        signal_images: usize,
+    ) {
+        use crate::testdb::generator::{MockDataGenerator, TEST_JPEG_SIZE};
+
+        let mut file_counter = 10000; // Start high to avoid ID conflicts
+
+        // === WhatsApp ===
+        if whatsapp_images > 0 || whatsapp_videos > 0 {
+            self.add_object(MockObject::folder("whatsapp", "internal", "WhatsApp"));
+            self.add_object(MockObject::folder("wa_media", "whatsapp", "Media"));
+
+            if whatsapp_images > 0 {
+                self.add_object(MockObject::folder(
+                    "wa_images",
+                    "wa_media",
+                    "WhatsApp Images",
+                ));
+                for i in 0..whatsapp_images {
+                    let file_id = format!("wa_img_{:06}", file_counter);
+                    let file_name = format!("IMG-20240115-WA{:04}.jpg", i);
+                    let content = MockDataGenerator::generate_jpeg_with_seed(
+                        TEST_JPEG_SIZE,
+                        file_counter as u64,
+                    );
+                    self.add_object(MockObject::file(&file_id, "wa_images", &file_name, content));
+                    file_counter += 1;
+                }
+            }
+
+            if whatsapp_videos > 0 {
+                self.add_object(MockObject::folder(
+                    "wa_videos",
+                    "wa_media",
+                    "WhatsApp Video",
+                ));
+                for i in 0..whatsapp_videos {
+                    let file_id = format!("wa_vid_{:06}", file_counter);
+                    let file_name = format!("VID-20240115-WA{:04}.mp4", i);
+                    let content = MockDataGenerator::generate_mov_with_seed(
+                        TEST_JPEG_SIZE,
+                        file_counter as u64,
+                    );
+                    self.add_object(MockObject::file(&file_id, "wa_videos", &file_name, content));
+                    file_counter += 1;
+                }
+            }
+        }
+
+        // === Telegram ===
+        if telegram_images > 0 {
+            self.add_object(MockObject::folder("telegram", "internal", "Telegram"));
+            self.add_object(MockObject::folder(
+                "tg_images",
+                "telegram",
+                "Telegram Images",
+            ));
+
+            for i in 0..telegram_images {
+                let file_id = format!("tg_img_{:06}", file_counter);
+                let file_name = format!("photo_{:04}.jpg", i);
+                let content =
+                    MockDataGenerator::generate_jpeg_with_seed(TEST_JPEG_SIZE, file_counter as u64);
+                self.add_object(MockObject::file(&file_id, "tg_images", &file_name, content));
+                file_counter += 1;
+            }
+        }
+
+        // === Instagram (under Pictures) ===
+        // Note: Pictures folder may already exist from add_full_android_structure
+        if instagram_images > 0 {
+            // Check if Pictures exists, if not add it
+            if !self.objects.contains_key("pictures") {
+                self.add_object(MockObject::folder("pictures", "internal", "Pictures"));
+            }
+            self.add_object(MockObject::folder("instagram", "pictures", "Instagram"));
+
+            for i in 0..instagram_images {
+                let file_id = format!("ig_img_{:06}", file_counter);
+                let file_name = format!("IMG_20240115_{:06}.jpg", 200000 + i);
+                let content =
+                    MockDataGenerator::generate_jpeg_with_seed(TEST_JPEG_SIZE, file_counter as u64);
+                self.add_object(MockObject::file(&file_id, "instagram", &file_name, content));
+                file_counter += 1;
+            }
+        }
+
+        // === Signal ===
+        if signal_images > 0 {
+            self.add_object(MockObject::folder("signal", "internal", "Signal"));
+            self.add_object(MockObject::folder(
+                "signal_photos",
+                "signal",
+                "Signal Photos",
+            ));
+
+            for i in 0..signal_images {
+                let file_id = format!("sig_img_{:06}", file_counter);
+                let file_name = format!("signal-{:04}.jpg", i);
+                let content =
+                    MockDataGenerator::generate_jpeg_with_seed(TEST_JPEG_SIZE, file_counter as u64);
+                self.add_object(MockObject::file(
+                    &file_id,
+                    "signal_photos",
+                    &file_name,
+                    content,
+                ));
+                file_counter += 1;
+            }
+        }
+    }
+
+    /// Add a complete Android structure with app folders for comprehensive testing
+    ///
+    /// Creates a realistic Android device with:
+    /// - Standard DCIM/Camera photos
+    /// - Screenshots
+    /// - Pictures folder
+    /// - WhatsApp, Telegram, Instagram, Signal media folders
+    pub fn add_android_with_apps(
+        &mut self,
+        camera_files: usize,
+        screenshot_files: usize,
+        whatsapp_images: usize,
+        telegram_images: usize,
+    ) {
+        // First add the standard Android structure
+        self.add_full_android_structure(camera_files, screenshot_files, 2, 0);
+
+        // Then add app-specific folders
+        self.add_android_app_folders(
+            whatsapp_images,
+            2, // WhatsApp videos
+            telegram_images,
+            3, // Instagram images
+            2, // Signal images
+        );
+    }
+
     /// Add mixed file types for testing format handling
     /// Uses small content sizes for memory efficiency
     pub fn add_mixed_file_types(&mut self) {
@@ -791,16 +1073,11 @@ impl DeviceManagerTrait for MockDeviceManager {
     type Content = MockDeviceContent;
 
     fn enumerate_apple_devices(&self) -> Result<Vec<DeviceInfo>> {
-        Ok(self
-            .devices
-            .iter()
-            .filter(|d| {
-                d.manufacturer.to_lowercase().contains("apple")
-                    || d.model.to_lowercase().contains("iphone")
-                    || d.model.to_lowercase().contains("ipad")
-            })
-            .cloned()
-            .collect())
+        self.enumerate_devices_by_type(DeviceType::Apple)
+    }
+
+    fn enumerate_android_devices(&self) -> Result<Vec<DeviceInfo>> {
+        self.enumerate_devices_by_type(DeviceType::Android)
     }
 
     fn enumerate_all_devices(&self) -> Result<Vec<DeviceInfo>> {
