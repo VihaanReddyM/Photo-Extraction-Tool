@@ -52,3 +52,30 @@ pub use setup::{
     SetupResult,
 };
 pub use tracking::{scan_for_profiles, scan_for_profiles_default, ProfileSummary, StateTracker};
+
+/// Set a file's modification time from an ISO 8601 / RFC 3339 string (portable)
+#[cfg(not(windows))]
+pub(crate) fn set_mtime_from_iso8601(path: &std::path::Path, date_str: &str) -> Result<()> {
+    let dt: chrono::DateTime<chrono::Utc> = date_str.parse().map_err(|e| {
+        ExtractionError::IoError(format!("Failed to parse date '{}': {}", date_str, e))
+    })?;
+    let secs = dt.timestamp();
+    let time = if secs >= 0 {
+        std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs as u64)
+    } else {
+        std::time::UNIX_EPOCH - std::time::Duration::from_secs(secs.unsigned_abs())
+    };
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .map_err(|e| {
+            ExtractionError::IoError(format!("Failed to open '{}': {}", path.display(), e))
+        })?;
+    file.set_modified(time).map_err(|e| {
+        ExtractionError::IoError(format!(
+            "Failed to set time for '{}': {}",
+            path.display(),
+            e
+        ))
+    })
+}

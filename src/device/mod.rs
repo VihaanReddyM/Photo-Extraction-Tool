@@ -6,7 +6,8 @@
 //!
 //! # Submodules
 //!
-//! - `wpd` - Windows Portable Devices API wrapper
+//! - `wpd` - Windows Portable Devices API wrapper (Windows)
+//! - `gvfs` - GVFS/MTP backend (Linux and other Unix)
 //! - `profiles` - Device profile management
 //! - `traits` - Abstraction traits for testability
 //!
@@ -28,7 +29,12 @@
 
 pub mod profiles;
 pub mod traits;
+
+#[cfg(windows)]
 pub mod wpd;
+
+#[cfg(not(windows))]
+pub mod gvfs;
 
 // Re-export commonly used types from traits for convenience
 pub use traits::{
@@ -38,7 +44,14 @@ pub use traits::{
 
 // Re-export WPD-specific types
 pub use profiles::ProfileManager;
+#[cfg(windows)]
 pub use wpd::{
+    enumerate_all_mtp_devices, enumerate_android_devices, initialize_com, ComGuard, DeviceContent,
+    DeviceManager,
+};
+
+#[cfg(not(windows))]
+pub use gvfs::{
     enumerate_all_mtp_devices, enumerate_android_devices, initialize_com, ComGuard, DeviceContent,
     DeviceManager,
 };

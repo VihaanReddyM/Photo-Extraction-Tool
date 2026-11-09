@@ -37,6 +37,7 @@ use log::{debug, info, trace, warn};
 use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io::Write;
+#[cfg(windows)]
 use std::os::windows::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -654,7 +655,14 @@ enum ExtractResult {
     Duplicate(u64),
 }
 
+/// Set file modification timestamp from ISO 8601 date string (non-Windows)
+#[cfg(not(windows))]
+fn set_file_timestamp(path: &std::path::Path, date_str: &str) -> Result<()> {
+    crate::core::set_mtime_from_iso8601(path, date_str)
+}
+
 /// Set file modification timestamp from ISO 8601 date string
+#[cfg(windows)]
 fn set_file_timestamp(path: &std::path::Path, date_str: &str) -> Result<()> {
     use chrono::{DateTime, Utc};
     use windows::Win32::Foundation::FILETIME;

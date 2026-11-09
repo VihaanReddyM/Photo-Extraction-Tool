@@ -14,7 +14,7 @@ use crate::core::config::{
 use crate::core::error::{ExtractionError, Result};
 use crate::core::tracking::StateTracker;
 use crate::device::traits::{DeviceContentTrait, DeviceInfo, DeviceManagerTrait, DeviceObject};
-use crate::device::wpd::{DeviceContent, DeviceManager};
+use crate::device::{DeviceContent, DeviceManager};
 use crate::duplicate::{compute_data_hash, DuplicateIndex};
 use indicatif::{ProgressBar, ProgressStyle};
 use log::{debug, info, trace, warn};
@@ -24,8 +24,11 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
+#[cfg(windows)]
 use windows::core::PCWSTR;
+#[cfg(windows)]
 use windows::Win32::Devices::PortableDevices::WPD_RESOURCE_DEFAULT;
+#[cfg(windows)]
 use windows::Win32::System::Com::IStream;
 
 /// Configuration for photo extraction
@@ -1330,7 +1333,14 @@ fn extract_single_photo(
     Ok(ExtractResult::Extracted(bytes))
 }
 
+/// Set file modification timestamp from ISO 8601 date string (non-Windows)
+#[cfg(not(windows))]
+fn set_file_timestamp(path: &Path, date_str: &str) -> Result<()> {
+    crate::core::set_mtime_from_iso8601(path, date_str)
+}
+
 /// Set file modification timestamp from ISO 8601 date string
+#[cfg(windows)]
 fn set_file_timestamp(path: &Path, date_str: &str) -> Result<()> {
     use chrono::{DateTime, Utc};
     use std::os::windows::fs::OpenOptionsExt;
@@ -1476,7 +1486,14 @@ fn extract_to_path(
     }
 }
 
+/// Read a file from the device (non-Windows: through the mounted filesystem)
+#[cfg(not(windows))]
+fn read_file_from_device(content: &DeviceContent, object_id: &str) -> Result<Vec<u8>> {
+    content.read_file(object_id)
+}
+
 /// Read a file from the device using WPD resources API
+#[cfg(windows)]
 fn read_file_from_device(content: &DeviceContent, object_id: &str) -> Result<Vec<u8>> {
     unsafe {
         // Get the resources interface

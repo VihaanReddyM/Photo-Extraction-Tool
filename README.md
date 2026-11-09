@@ -1,10 +1,16 @@
 # 📸 Photo Extraction Tool
 
-A fast, reliable command-line tool for extracting photos and videos from iOS devices (iPhone/iPad) and Android phones on Windows — **no iTunes or additional drivers required**.
+**Copy photos and videos off your iPhone, iPad or Android phone to a Windows or Linux PC — fast, incremental, and with no iTunes, no drivers, no cloud.**
 
+[![CI](https://github.com/VihaanReddyM/Photo-Extraction-Tool/actions/workflows/ci.yml/badge.svg)](https://github.com/VihaanReddyM/Photo-Extraction-Tool/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/VihaanReddyM/Photo-Extraction-Tool)](https://github.com/VihaanReddyM/Photo-Extraction-Tool/releases)
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Windows-lightgrey.svg)](https://www.microsoft.com/windows)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey.svg)](#-installation)
+
+> iPhone photo backup · iOS photo transfer · Android photo backup · MTP / WPD · HEIC · WhatsApp media export · duplicate photo detection · written in Rust
+
+**Why this tool?** Windows Explorer copies are slow and re-copy everything each time; iTunes and iCloud are heavy. This tool talks to the device directly through the Windows Portable Devices (WPD) API on Windows and GVFS/MTP on Linux, remembers what it already copied, and only transfers new files.
 
 ---
 
@@ -12,6 +18,7 @@ A fast, reliable command-line tool for extracting photos and videos from iOS dev
 
 - **🚀 Fast & Efficient** — Direct device access via Windows Portable Devices (WPD) API
 - **📱 No iTunes Required** — Works out of the box on Windows 10/11
+- **🐧 Linux Support** — Uses your desktop's GVFS (MTP/PTP) mounts; no extra C libraries to build
 - **🤖 Android Support** — Extract from Samsung, Pixel, OnePlus, Xiaomi, and more
 - **💬 App Media Extraction** — WhatsApp, Telegram, Instagram, Signal, and more
 - **🔄 Incremental Backups** — Only extract new photos, skip existing ones
@@ -30,6 +37,7 @@ A fast, reliable command-line tool for extracting photos and videos from iOS dev
 - [Installation](#-installation)
 - [Usage](#-usage)
 - [Configuration](#-configuration)
+- [Linux Support](#-linux-support)
 - [Android Support](#-android-support)
 - [Features in Detail](#-features-in-detail)
 - [Troubleshooting](#-troubleshooting)
@@ -41,7 +49,7 @@ A fast, reliable command-line tool for extracting photos and videos from iOS dev
 
 ### First Time Setup
 
-1. **Connect your iOS device** (iPhone/iPad) or **Android phone** to your Windows PC via USB
+1. **Connect your iOS device** (iPhone/iPad) or **Android phone** to your Windows or Linux PC via USB
 2. **Unlock your device** and tap **"Trust"** (iOS) or **"Allow"** (Android) when prompted
 3. **Run the tool**:
 
@@ -88,21 +96,21 @@ photo_extraction_tool
 
 ### Pre-built Binary
 
-1. Download the latest release from the [Releases](https://github.com/VihaanReddyM/photo-extraction-tool/releases) page
+1. Download the latest release from the [Releases](https://github.com/VihaanReddyM/Photo-Extraction-Tool/releases) page
 2. Extract the ZIP file to your preferred location
 3. (Optional) Add the folder to your system PATH
 
 ### Using Cargo
 
 ```bash
-cargo install photo-extraction-tool
+cargo install --git https://github.com/VihaanReddyM/Photo-Extraction-Tool
 ```
 
 ### From Source
 
 ```bash
-git clone https://github.com/VihaanReddyM/photo-extraction-tool.git
-cd photo-extraction-tool
+git clone https://github.com/VihaanReddyM/Photo-Extraction-Tool.git
+cd Photo-Extraction-Tool
 cargo build --release
 ```
 
@@ -164,6 +172,7 @@ photo_extraction_tool --detect-duplicates --compare-to "D:/ExistingPhotos"
 
 Configuration is stored at:
 - **Windows**: `%APPDATA%\photo_extraction_tool\config.toml`
+- **Linux / macOS**: `~/.config/photo_extraction_tool/config.toml`
 
 ### Quick Setup
 
@@ -277,6 +286,32 @@ This tool automatically detects and handles both structures.
 
 ---
 
+## 🐧 Linux Support
+
+On Linux the tool reads phones through GVFS (the same layer GNOME Files, Cinnamon and XFCE use). KDE users just need the `gvfs` packages below installed.
+
+**Requirements**
+
+```bash
+# Debian / Ubuntu
+sudo apt install gvfs-backends gvfs-fuse libimobiledevice-utils ifuse
+
+# Fedora
+sudo dnf install gvfs-mtp gvfs-gphoto2 gvfs-afc libimobiledevice
+```
+
+**Usage**
+
+1. Plug in the phone and unlock it. On Android choose **File transfer (MTP)**; on iPhone tap **Trust**.
+2. Run `photo_extraction_tool list --all` — the phone should appear. (If it doesn't, open it once in your file manager, or run `gio mount -li`.)
+3. Android phones need `apple_only = false` in the config (see below), then run `photo_extraction_tool`.
+
+Devices are found under `$XDG_RUNTIME_DIR/gvfs/` (`mtp:`, `gphoto2:` and `afc:` mounts). iPhones exposed via `gphoto2` or `afc` provide the camera roll (DCIM). Override the location with `PHOTO_EXTRACTION_GVFS_DIR`.
+
+> Linux support is new — please [open an issue](https://github.com/VihaanReddyM/Photo-Extraction-Tool/issues) with your distro and phone model if something doesn't work.
+
+---
+
 ## 🤖 Android Support
 
 The tool fully supports Android devices (Samsung, Google Pixel, OnePlus, Xiaomi, and more).
@@ -371,7 +406,7 @@ photo_extraction_tool list
 3. **Check USB Settings**: Pull down notification shade and tap USB notification to change mode
 4. **Enable USB Debugging**: Some devices may require this in Developer Options
 
-> **Note**: No iTunes or additional drivers required. Windows 10/11 includes built-in support for iOS and Android devices via MTP.
+> **Note**: No iTunes or additional drivers required on Windows 10/11, which includes built-in MTP support. On Linux, see [Linux Support](#-linux-support).
 
 ### "No photos found"
 
@@ -400,16 +435,15 @@ photo_extraction_tool list
 ### Prerequisites
 
 - [Rust](https://rustup.rs/) 1.75 or later
-- Windows 10/11
-- Visual Studio Build Tools (for Windows API bindings)
+- Windows 10/11 (with Visual Studio Build Tools), or Linux (any modern distro, no system libraries needed to build)
 
 ### Build Steps
 
 ```bash
-git clone https://github.com/VihaanReddyM/photo-extraction-tool.git
-cd photo-extraction-tool
+git clone https://github.com/VihaanReddyM/Photo-Extraction-Tool.git
+cd Photo-Extraction-Tool
 cargo build --release
-# Binary at: target/release/photo_extraction_tool.exe
+# Binary at: target/release/photo_extraction_tool(.exe on Windows)
 ```
 
 ### Running Tests
@@ -440,7 +474,8 @@ src/
 │   ├── extractor.rs     # Extraction logic
 │   └── tracking.rs      # State tracking
 ├── device/              # Device interaction
-│   ├── wpd.rs           # Windows Portable Devices API
+│   ├── wpd.rs           # Windows Portable Devices API (Windows)
+│   ├── gvfs.rs          # GVFS/MTP backend (Linux)
 │   └── profiles.rs      # Device profiles
 └── duplicate/           # Duplicate detection
     └── detector.rs      # SHA256-based detection
@@ -448,9 +483,19 @@ src/
 
 ---
 
+## 🗺️ Roadmap
+
+- [ ] Polished desktop GUI (egui, in progress)
+- [ ] Publish to crates.io / winget
+- [ ] Perceptual (near-duplicate) detection
+- [x] Linux support via GVFS
+- [ ] macOS support
+
+---
+
 ## 🤝 Contributing
 
-Contributions are welcome! Please:
+Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md). In short:
 
 1. Fork the repository
 2. Create a feature branch
