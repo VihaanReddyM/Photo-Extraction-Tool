@@ -88,7 +88,7 @@ photo_extraction_tool
 
 ### Pre-built Binary
 
-1. Download the latest release from the [Releases](https://github.com/yourusername/photo-extraction-tool/releases) page
+1. Download the latest release from the [Releases](https://github.com/VihaanReddyM/photo-extraction-tool/releases) page
 2. Extract the ZIP file to your preferred location
 3. (Optional) Add the folder to your system PATH
 
@@ -101,7 +101,7 @@ cargo install photo-extraction-tool
 ### From Source
 
 ```bash
-git clone https://github.com/yourusername/photo-extraction-tool.git
+git clone https://github.com/VihaanReddyM/photo-extraction-tool.git
 cd photo-extraction-tool
 cargo build --release
 ```
@@ -406,7 +406,7 @@ photo_extraction_tool list
 ### Build Steps
 
 ```bash
-git clone https://github.com/yourusername/photo-extraction-tool.git
+git clone https://github.com/VihaanReddyM/photo-extraction-tool.git
 cd photo-extraction-tool
 cargo build --release
 # Binary at: target/release/photo_extraction_tool.exe
